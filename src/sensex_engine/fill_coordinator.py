@@ -56,8 +56,15 @@ class FillCoordinator:
             expected_side = "SELL" if expected_side == "BUY" else "BUY"
         if str(order["side"]).upper() != expected_side:
             raise ValueError("Order side does not match the requested position fill phase")
-        if int(order["quantity"]) != int(leg["quantity"]):
-            raise ValueError("Order quantity does not match planned position leg quantity")
+        order_quantity = int(order["quantity"])
+        if order_quantity > int(leg["quantity"]):
+            raise ValueError("Order quantity exceeds planned position leg quantity")
+        if normalized_phase == "CLOSE":
+            remaining = int(leg["opened_quantity"]) - int(leg["closed_quantity"])
+            if remaining <= 0 or order_quantity > remaining:
+                raise ValueError("Close order quantity exceeds confirmed remaining exposure")
+        elif int(leg["opened_quantity"]) + order_quantity > int(leg["quantity"]):
+            raise ValueError("Opening order quantity exceeds unfilled planned exposure")
         # Persist broker fact first. If projection fails or process stops, replaying this
         # exact fill is safe: the order ledger deduplicates it and projection is retried.
         order_created = self.orders.record_fill(
