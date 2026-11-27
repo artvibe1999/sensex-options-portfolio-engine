@@ -150,6 +150,10 @@ class PortfolioAccountingService:
             or entries_today < 0
         ):
             raise ValueError("Position and entry counts must be non-negative integers")
+        if open_positions > 0 and values["open_max_loss"] <= 0:
+            raise ValueError("Open positions require a positive, defined maximum-loss estimate")
+        if open_positions == 0 and values["open_max_loss"] != 0:
+            raise ValueError("A flat portfolio cannot report non-zero open maximum loss")
         timestamp = marked_at or datetime.now(UTC)
         if timestamp.tzinfo is None:
             raise ValueError("Equity mark timestamp must be timezone-aware")
