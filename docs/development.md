@@ -23,9 +23,10 @@ Set `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER_IDS`, and
 `TELEGRAM_ALLOWED_CHAT_IDS` in the runtime environment. The two allowlists are
 comma-separated numeric IDs; an empty allowlist authorizes nobody.
 
-The transport can be created with `create_telegram_application` from
-`sensex_engine.telegram_transport` and started by the process supervisor using
-the returned application's `run_polling()` lifecycle. It persists an idempotent
+The paper-only polling process can be started with
+`python -m sensex_engine.telegram_transport`. For embedding, use
+`create_telegram_application` from `sensex_engine.telegram_transport` and
+manage the returned application's `run_polling()` lifecycle. It persists an idempotent
 command receipt before dispatch and records the outcome afterward. If audit
 storage is unavailable, the command is not executed; if audit finalization
 fails, runtime mode is forced to paper and entries are paused.
