@@ -197,8 +197,14 @@ class EmergencyCloseAllService:
                     cancelled.append(order_id)
                     continue
                 if state is OrderState.VALIDATED and phase == "CLOSE":
-                    # A durable, not-yet-submitted close intent is safe to resume
-                    # through the coordinator after the portfolio preflight.
+                    position = self._positions.snapshot(str(current["position_id"]))
+                    if position is None or str(position.get("mode", "")).lower() != "live":
+                        unresolved.append(order_id)
+                        reasons.append(
+                            f"Validated close order {order_id} has no durable LIVE position"
+                        )
+                    # Otherwise the coordinator will resume this exact immutable intent
+                    # after broker/local exposure reconciliation.
                     continue
                 self._submission.refresh_order(order_id)
                 self._poll_order(order_id)
@@ -217,7 +223,9 @@ class EmergencyCloseAllService:
                     self._poll_order(order_id)
                     current = self._orders.snapshot(order_id)
                     state = OrderState(current["state"]) if current else OrderState.UNKNOWN
-                if state in _TERMINAL or current.get("cancel_confirmed", False):
+                if current is not None and (
+                    state in _TERMINAL or current.get("cancel_confirmed", False)
+                ):
                     if phase == "OPEN" and (
                         state in {
                             OrderState.CANCELLED, OrderState.REJECTED, OrderState.EXPIRED,
@@ -299,6 +307,13 @@ class EmergencyCloseAllService:
         except Exception as exc:
             unresolved.append("FINAL_FILL_BACKFILL")
             reasons.append(f"Final trade-history backfill failed: {type(exc).__name__}")
+
+        for order in self._orders.active_snapshots():
+            if str(order.get("mode", "")).lower() == "live":
+                order_id = str(order["order_id"])
+                if order_id not in unresolved:
+                    unresolved.append(order_id)
+                reasons.append(f"Live order {order_id} remains unresolved after close-all")
 
         residuals, final_issues = self._reconcile_exposure(
             contracts, require_no_open_orders=True
