@@ -349,3 +349,27 @@ def test_duplicate_receipt_with_changed_payload_is_rejected(tmp_path):
 
     with pytest.raises(ValueError, match="conflicts with existing payload"):
         service.ingest(event(quantity=9))
+
+
+def test_recovery_skips_another_workers_active_inbox_lease(tmp_path):
+    service, orders, _ = setup_ingestion(tmp_path)
+    sample = event()
+    key = f"{sample.broker_order_id}:{sample.broker_trade_id}"
+    orders.store.receive_broker_fill(
+        event_key=key,
+        payload={
+            "broker_order_id": sample.broker_order_id,
+            "broker_trade_id": sample.broker_trade_id,
+            "instrument_token": sample.instrument_token,
+            "tradingsymbol": sample.tradingsymbol,
+            "side": sample.side,
+            "quantity": sample.quantity,
+            "price": str(sample.price),
+            "filled_at": sample.filled_at,
+            "phase": sample.phase,
+        },
+    )
+    assert orders.store.claim_broker_fill(event_key=key) is not None
+
+    assert service.recover_pending() == []
+    assert orders.store.broker_fill_receipt(key)["status"] == "PROCESSING"
