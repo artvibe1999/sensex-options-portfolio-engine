@@ -1,12 +1,17 @@
 """Optional python-telegram-bot transport with audited, fail-closed dispatch."""
 from collections.abc import Callable
+from datetime import datetime
+import logging
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from .mode import ModeController
 from .persistence import SqliteStore
 from .telegram_control import OperationsController
 
 ReadinessProvider = Callable[[], tuple[bool, bool]]
+IST = ZoneInfo("Asia/Kolkata")
+logger = logging.getLogger(__name__)
 
 COMMANDS = (
     "help", "status", "paper", "live", "confirm_live",
@@ -188,19 +193,87 @@ def build_application_from_settings(
     )
     if not operations.allowlist.user_ids or not operations.allowlist.chat_ids:
         raise ValueError("Telegram user and chat allowlists must both be configured")
-    return create_telegram_application(
+    application = create_telegram_application(
         settings.telegram_bot_token,
         operations=operations,
         store=store,
         readiness_provider=readiness_provider,
     )
+    application.bot_data["operations_controller"] = operations
+    application.bot_data["portfolio_store"] = store
+    return application
+
+
+def run_startup_recovery_from_settings(
+    settings: Any,
+    *,
+    store: SqliteStore,
+    operations: OperationsController,
+    broker_factory: Callable[[str, str], Any] | None = None,
+) -> Any | None:
+    """Run read-only Kite recovery before Telegram polling when credentials exist.
+
+    Missing credentials deliberately leave the startup gate closed; they never
+    prevent the paper-mode Telegram process from starting.
+    """
+    operations.startup_recovery_complete = False
+    api_key = str(getattr(settings, "kite_api_key", "") or "").strip()
+    access_token = str(getattr(settings, "kite_access_token", "") or "").strip()
+    if not api_key or not access_token:
+        return None
+
+    from .broker_fill_ingestion import BrokerFillIngestionService
+    from .fill_coordinator import FillCoordinator
+    from .kite import KiteReadOnlyAdapter
+    from .kite_fill_transport import KiteTradeHistoryIngestor
+    from .order_lifecycle import OrderLifecycle
+    from .position_lifecycle import PositionLifecycle
+    from .startup_recovery import KiteStartupRecoveryService
+
+    factory = broker_factory or KiteReadOnlyAdapter.from_credentials
+    try:
+        broker = factory(api_key, access_token)
+        positions = PositionLifecycle(store)
+        orders = OrderLifecycle(store)
+        ingestion = BrokerFillIngestionService(FillCoordinator(orders, positions))
+        history = KiteTradeHistoryIngestor(
+            client=broker, orders=orders, positions=positions, ingestion=ingestion,
+        )
+        recovery = KiteStartupRecoveryService(
+            broker=broker,
+            contracts_provider=broker.instruments,
+            position_lifecycle=positions,
+            order_lifecycle=orders,
+            fill_ingestion=ingestion,
+            trade_history=history,
+        )
+        result = recovery.recover(session_date=datetime.now(IST).date())
+        operations.startup_recovery_complete = result.recovery_complete
+        if not result.recovery_complete:
+            logger.error("Kite startup recovery blocked: %s", "; ".join(result.reasons))
+        else:
+            logger.info(
+                "Kite startup recovery completed: receipts=%d fills=%d",
+                result.recovered_receipts, result.backfilled_fills,
+            )
+        return result
+    except Exception as exc:
+        operations.startup_recovery_complete = False
+        logger.error("Kite startup recovery could not run: %s", type(exc).__name__)
+        return None
 
 
 def run_from_environment() -> None:
-    """Run the Telegram polling process in paper-only fail-closed configuration."""
+    """Run Telegram polling after a read-only, fail-closed Kite recovery attempt."""
     from .config import Settings
 
-    application = build_application_from_settings(Settings())
+    settings = Settings()
+    application = build_application_from_settings(settings)
+    run_startup_recovery_from_settings(
+        settings,
+        store=application.bot_data["portfolio_store"],
+        operations=application.bot_data["operations_controller"],
+    )
     application.run_polling()
 
 
