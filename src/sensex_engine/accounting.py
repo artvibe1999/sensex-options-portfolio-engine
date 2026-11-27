@@ -6,11 +6,13 @@ marks. It never assumes the illustrative capital amount in the requirements docu
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta
+import hashlib
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from .capital import adaptive_risk_budget, affordable_lots
 from .domain import PortfolioSnapshot
+from .reconciliation import ReconciliationReport
 
 ACCOUNT_ID = "account:default"
 def _decimal(value: Any, field: str) -> Decimal:
@@ -113,7 +115,7 @@ class PortfolioAccountingService:
     def record_reconciled_mark(
         self, *, broker_net_equity: Decimal, unrealized_pnl: Decimal,
         available_margin: Decimal, open_max_loss: Decimal, open_positions: int,
-        entries_today: int, reconciliation_id: str, broker_positions_hash: str,
+        entries_today: int, reconciliation_id: str,\n        reconciliation_report: ReconciliationReport,
         marked_at: datetime | None = None,
     ) -> bool:
         values = {
@@ -122,8 +124,20 @@ class PortfolioAccountingService:
             "available_margin": _decimal(available_margin, "available_margin"),
             "open_max_loss": _decimal(open_max_loss, "open_max_loss"),
         }
-        if not reconciliation_id.strip() or not broker_positions_hash.strip():
-            raise ValueError("Broker reconciliation identity and positions hash are required")
+        if not reconciliation_id.strip():
+            raise ValueError("Broker reconciliation identity is required")
+        if (
+            not isinstance(reconciliation_report, ReconciliationReport)
+            or reconciliation_report.reconciled is not True
+            or reconciliation_report.mismatches
+            or reconciliation_report.pending_order_ids
+            or reconciliation_report.expected_quantities
+            != reconciliation_report.broker_quantities
+        ):
+            raise ValueError("A clean broker position/order reconciliation is required")
+        positions_hash = hashlib.sha256(
+            repr(reconciliation_report.broker_quantities).encode("utf-8")
+        ).hexdigest()
         if values["broker_net_equity"] <= 0 or values["available_margin"] < 0 or values["open_max_loss"] < 0:
             raise ValueError("Broker equity must be positive and risk/margin values non-negative")
         if (
@@ -143,7 +157,7 @@ class PortfolioAccountingService:
             **{k: str(v) for k, v in values.items()},
             "open_positions": open_positions, "entries_today": entries_today,
             "reconciliation_id": reconciliation_id,
-            "broker_positions_hash": broker_positions_hash,
+            "broker_positions_hash": positions_hash,
             "marked_at": timestamp.astimezone(UTC).isoformat(),
         })
 
