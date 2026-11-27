@@ -113,3 +113,13 @@ def test_full_fill_requires_matching_quantity_and_valid_price():
     )
     assert report.blocked and not report.completed
     assert len(submitter.calls) == 1
+
+
+def test_malformed_submitter_response_halts_without_submitting_next_leg():
+    submitter = FakeSubmitter([None, filled("must-not-submit")])
+    report = PaperSequentialExecutionCoordinator(submitter).execute(
+        make_position(), ExecutionPhase.OPEN
+    )
+    assert report.blocked and not report.completed
+    assert report.outcomes[0].result is None
+    assert len(submitter.calls) == 1
