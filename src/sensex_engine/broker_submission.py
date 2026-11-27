@@ -43,6 +43,10 @@ class BrokerSubmissionPort(Protocol):
         self, client_order_key: str, *, expected_action: LegExecutionAction | None = None
     ) -> tuple[BrokerOrderReceipt, ...]: ...
 
+    def cancel_order(
+        self, broker_order_id: str, *, client_order_key: str
+    ) -> BrokerOrderReceipt: ...
+
 
 @dataclass(frozen=True)
 class SubmissionOutcome:
@@ -167,12 +171,14 @@ class DurableBrokerSubmissionService:
         if snapshot is None:
             raise ValueError("Unknown order intent")
         state = OrderState(snapshot["state"])
-        if state not in {
-            OrderState.SUBMITTING, OrderState.UNKNOWN,
-            OrderState.RECOVERY_REQUIRED,
-        }:
+        recoverable = {
+            OrderState.SUBMITTING, OrderState.ACKNOWLEDGED, OrderState.OPEN,
+            OrderState.PARTIALLY_FILLED, OrderState.CANCEL_PENDING,
+            OrderState.UNKNOWN, OrderState.RECOVERY_REQUIRED,
+        }
+        if state not in recoverable:
             return self._outcome(
-                snapshot, False, "Order does not require submission recovery"
+                snapshot, False, "Order does not require broker-state recovery"
             )
 
         client_key = str(snapshot.get("client_order_key", "")).strip()
@@ -248,25 +254,96 @@ class DurableBrokerSubmissionService:
             return self._outcome(
                 snapshot, False, "Malformed broker lookup result; manual reconciliation required"
             )
-        if receipt.status is BrokerOrderStatus.REJECTED:
-            target = OrderState.REJECTED
-        elif receipt.status is BrokerOrderStatus.CANCELLED:
-            target = OrderState.CANCELLED
-        else:
-            target = OrderState.ACKNOWLEDGED
-        self._lifecycle.transition(
-            order_id=order_id,
-            new_state=target,
-            update_id=f"recovered:{receipt.broker_order_id}",
-            broker_order_id=receipt.broker_order_id,
-            message=f"Recovered broker order status: {receipt.status.value}",
-        )
+        target_by_status = {
+            BrokerOrderStatus.ACCEPTED: OrderState.ACKNOWLEDGED,
+            BrokerOrderStatus.OPEN: OrderState.OPEN,
+            BrokerOrderStatus.PARTIALLY_FILLED: OrderState.PARTIALLY_FILLED,
+            BrokerOrderStatus.FILLED: OrderState.FILLED,
+            BrokerOrderStatus.REJECTED: OrderState.REJECTED,
+            BrokerOrderStatus.CANCELLED: OrderState.CANCELLED,
+        }
+        target = target_by_status[receipt.status]
+        if not (state is OrderState.CANCEL_PENDING and target is OrderState.OPEN):
+            self._lifecycle.transition(
+                order_id=order_id,
+                new_state=target,
+                update_id=f"recovered:{receipt.broker_order_id}:{receipt.status.value}",
+                broker_order_id=receipt.broker_order_id,
+                message=f"Recovered broker order status: {receipt.status.value}",
+            )
         current = self._lifecycle.snapshot(order_id)
         assert current is not None
         return self._outcome(
             current, False,
             "Broker order correlated; fills still require independent fill-event reconciliation",
         )
+
+    def cancel_once(self, order_id: str) -> SubmissionOutcome:
+        """Request one cancellation; never interpret its acknowledgement as final."""
+        snapshot = self._lifecycle.snapshot(order_id)
+        if snapshot is None:
+            raise ValueError("Unknown order intent")
+        state = OrderState(snapshot["state"])
+        if state is OrderState.CANCEL_PENDING:
+            return self._outcome(
+                snapshot, False, "Cancellation already requested; await broker confirmation"
+            )
+        if state not in {
+            OrderState.ACKNOWLEDGED, OrderState.OPEN, OrderState.PARTIALLY_FILLED,
+        }:
+            return self._outcome(
+                snapshot, False, "Order is not in a cancellable confirmed state"
+            )
+        broker_order_id = snapshot.get("broker_order_id")
+        client_key = str(snapshot.get("client_order_key", "")).strip()
+        if not broker_order_id or not client_key:
+            return self._outcome(
+                snapshot, False, "Missing broker correlation; cancellation refused"
+            )
+        self._lifecycle.transition(
+            order_id=order_id,
+            new_state=OrderState.CANCEL_PENDING,
+            update_id=f"cancel-claim:{broker_order_id}",
+            message="Durable cancel request recorded before broker call",
+        )
+        try:
+            receipt = self._broker.cancel_order(
+                str(broker_order_id), client_order_key=client_key
+            )
+        except Exception as exc:
+            self._lifecycle.transition(
+                order_id=order_id,
+                new_state=OrderState.UNKNOWN,
+                update_id=f"cancel-uncertain:{broker_order_id}",
+                message=f"Cancel outcome uncertain: {type(exc).__name__}",
+            )
+            current = self._lifecycle.snapshot(order_id)
+            assert current is not None
+            return self._outcome(
+                current, False, "Cancel outcome uncertain; recover broker status before proceeding"
+            )
+        if not self._valid_receipt(receipt) or receipt.broker_order_id != broker_order_id:
+            self._lifecycle.transition(
+                order_id=order_id,
+                new_state=OrderState.UNKNOWN,
+                update_id=f"cancel-malformed:{broker_order_id}",
+                message="Malformed or mismatched broker cancel response",
+            )
+            current = self._lifecycle.snapshot(order_id)
+            assert current is not None
+            return self._outcome(
+                current, False, "Cancel response invalid; recover broker status before proceeding"
+            )
+        current = self._lifecycle.snapshot(order_id)
+        assert current is not None
+        return self._outcome(
+            current, False,
+            "Cancel request acknowledged; final broker status and racing fills remain unconfirmed",
+        )
+
+    def refresh_order(self, order_id: str) -> SubmissionOutcome:
+        """Refresh broker order state by exact durable tag; this never resubmits."""
+        return self.recover(order_id)
 
     def _require_matching_intent(
         self, order_id: str, action: LegExecutionAction
