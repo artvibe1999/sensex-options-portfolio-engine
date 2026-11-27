@@ -57,3 +57,20 @@ or invalid OHLC data. Its thresholds are conservative initial engineering
 defaults and require forward validation before strategy use. It does not
 constitute a profitability claim, and it must not replace the independent risk
 engine or quote-quality gates.
+
+
+## Payoff validation and candidate generation
+
+The payoff module evaluates same-expiry structures at all strike breakpoints and
+rejects net short-call exposure with theoretically unbounded upside loss. It
+reports premium cashflow, expiry max loss/profit and breakeven estimates using
+exchange lot sizes. Costs are tracked separately and must be included in the
+portfolio risk budget.
+
+The initial candidate factory is deliberately narrow: bullish trend can produce
+a bull-call debit vertical, and bearish trend can produce a bear-put debit
+vertical. It selects only current listed strikes from a validated option-chain
+snapshot and scales quantities in whole lots. Range, transition, volatility
+expansion and unknown regimes currently generate no candidate. Candidate
+generation is advisory only; it does not submit orders and must still pass
+independent risk, margin, execution-liquidity and broker-reconciliation gates.
