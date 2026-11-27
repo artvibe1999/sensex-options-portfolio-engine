@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     kite_monitor_poll_interval_seconds: int = Field(30, ge=10, le=300)
     kite_monitor_max_stale_seconds: int = Field(120, ge=30, le=900)
     kite_monitor_retry_max_seconds: int = Field(30, ge=5, le=120)
+    # Must be explicitly confirmed after the Kite developer-console static-IP setup.
+    kite_static_ip_confirmed: bool = False
+    max_margin_utilization_pct: float = Field(0.70, gt=0, le=1)
 
     # Environment configuration can never silently boot the process into live mode.
     trading_mode: Literal["paper", "live"] = "paper"
