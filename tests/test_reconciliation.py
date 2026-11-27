@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from sensex_engine.domain import Contract, OptionLeg, Position, Right, Side, TradingMode
+from sensex_engine.order_lifecycle import OrderLifecycle
 from sensex_engine.reconciliation import (
     BrokerReconciliationService,
     reconcile_snapshots,
@@ -248,3 +249,70 @@ def test_reconcile_store_fails_closed_for_partial_position(tmp_path):
     )
     assert not report.reconciled
     assert any("not fully OPEN" in item for item in report.mismatches)
+
+
+
+def test_reconcile_store_blocks_unresolved_live_order_intents(tmp_path):
+    from sensex_engine.persistence import SqliteStore
+    from sensex_engine.position_lifecycle import PositionLifecycle
+
+    store = SqliteStore(tmp_path / "live-orders.sqlite3")
+    positions = PositionLifecycle(store)
+    orders = OrderLifecycle(store)
+    orders.create_intent(
+        order_id="live-order-1", position_id="position-1", leg_index=0,
+        instrument_token=1, tradingsymbol="SENSEX80000CE", side="BUY",
+        quantity=20, order_type="LIMIT", product="MIS", mode="live",
+        idempotency_key="live-order-create",
+    )
+
+    class Broker:
+        def is_authenticated(self):
+            return True
+
+        def positions(self):
+            return {"net": []}
+
+        def orders(self):
+            return []
+
+    report = BrokerReconciliationService().reconcile_store(
+        Broker(), contracts=[_contract(1, "SENSEX80000CE", "80000")],
+        position_lifecycle=positions, order_lifecycle=orders,
+    )
+    assert not report.reconciled
+    assert any(
+        "Live internal order live-order-1 requires reconciliation" in issue
+        for issue in report.mismatches
+    )
+
+
+def test_reconcile_store_does_not_block_on_paper_order_intents(tmp_path):
+    from sensex_engine.persistence import SqliteStore
+    from sensex_engine.position_lifecycle import PositionLifecycle
+
+    store = SqliteStore(tmp_path / "paper-orders.sqlite3")
+    positions = PositionLifecycle(store)
+    orders = OrderLifecycle(store)
+    orders.create_intent(
+        order_id="paper-order-1", position_id="position-1", leg_index=0,
+        instrument_token=1, tradingsymbol="SENSEX80000CE", side="BUY",
+        quantity=20, order_type="LIMIT", product="MIS", mode="paper",
+        idempotency_key="paper-order-create",
+    )
+
+    class Broker:
+        def is_authenticated(self):
+            return True
+
+        def positions(self):
+            return {"net": []}
+
+        def orders(self):
+            return []
+
+    report = BrokerReconciliationService().reconcile_store(
+        Broker(), contracts=[_contract(1, "SENSEX80000CE", "80000")],
+        position_lifecycle=positions, order_lifecycle=orders,
+    )
+    assert report.reconciled
