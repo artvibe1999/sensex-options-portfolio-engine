@@ -154,6 +154,8 @@ class LiveAccountingRefresh:
             raise ValueError("Broker equity segment is disabled")
         equity = _decimal(data["net_liquidation_equity"], "statement equity")
         cash = _decimal(data["cash_balance"], "statement cash")
+        if abs(self.account.ledger_equity(unrealized) - equity) > Decimal("1.00"):
+            raise ValueError("Independent statement disagrees with reconstructed equity")
         self.account.record_reconciled_mark(
             broker_net_equity=equity, unrealized_pnl=unrealized,
             available_margin=_decimal(margin["net"], "available margin"),
