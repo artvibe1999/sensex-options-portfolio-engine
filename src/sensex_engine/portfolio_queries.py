@@ -96,4 +96,5 @@ class PortfolioQueryService:
     def _limit(self, value: str) -> str:
         if len(value) <= self.max_message_chars:
             return value
-        suffix = "\n... output truncated"\n        return value[: self.max_message_chars - len(suffix)] + suffix
+        suffix = "\n... output truncated"
+        return value[: self.max_message_chars - len(suffix)] + suffix
