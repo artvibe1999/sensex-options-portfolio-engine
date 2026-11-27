@@ -269,3 +269,17 @@ def test_generated_client_key_is_stable_after_restart(tmp_path):
     original_key = lifecycle.snapshot("generated-order")["client_order_key"]
     restarted = OrderLifecycle(SqliteStore(tmp_path / "generated.sqlite3"))
     assert restarted.snapshot("generated-order")["client_order_key"] == original_key
+
+
+def test_malformed_lookup_response_requires_manual_recovery(tmp_path):
+    lifecycle = make_lifecycle(tmp_path)
+    broker = FakeBroker(submission=TimeoutError())
+    service = DurableBrokerSubmissionService(
+        lifecycle, broker, live_submission_enabled=True
+    )
+    service.submit_once("internal-1", ACTION)
+    broker.lookups = None
+
+    result = service.recover("internal-1")
+    assert result.state is OrderState.RECOVERY_REQUIRED
+    assert len(broker.submit_calls) == 1
