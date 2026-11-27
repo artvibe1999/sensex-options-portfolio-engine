@@ -48,3 +48,14 @@ def test_quote_quality_accepts_fresh_liquid_quote():
     now = datetime.now(UTC)
     quote = Quote(1, now, Decimal("100"), Decimal("99.5"), Decimal("100.5"), 20, 25, 1000)
     assert validate_quote(quote, now=now).valid
+
+
+def test_quote_quality_rejects_zero_traded_volume():
+    now = datetime.now(UTC)
+    quote = Quote(
+        1, now, Decimal("100"), Decimal("99.5"), Decimal("100.5"),
+        20, 25, 0,
+    )
+    result = validate_quote(quote, now=now)
+    assert not result.valid
+    assert result.reason == "Insufficient traded volume"
