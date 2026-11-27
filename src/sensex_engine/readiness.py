@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from typing import Any, Callable
+from collections.abc import Callable
+from datetime import UTC, datetime
+from typing import Any
 
 from .reconciliation import BrokerReconciliationService, ReconciliationReport
 
@@ -62,7 +63,7 @@ class LiveReadinessService:
         return -1 <= age <= max_age
 
     def evaluate(self, *, now: datetime | None = None) -> ReadinessResult:
-        current = now or datetime.now(timezone.utc)
+        current = now or datetime.now(UTC)
         if current.tzinfo is None or current.utcoffset() is None:
             raise ValueError("Readiness evaluation time must be timezone-aware")
         reasons: list[str] = []
