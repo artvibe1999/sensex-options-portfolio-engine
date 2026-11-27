@@ -12,6 +12,7 @@ class OperationsController:
     mode: ModeController
     paused: bool = True
     portfolio_queries: Any | None = None
+    startup_recovery_complete: bool = False
 
     def handle(
         self,
@@ -29,7 +30,8 @@ class OperationsController:
             pending = self.mode.live_requested_by is not None
             return (
                 f"mode={self.mode.mode.value}; paused={self.paused}; "
-                f"live_confirmation_pending={pending}"
+                f"live_confirmation_pending={pending}; "
+                f"startup_recovery_complete={self.startup_recovery_complete}"
             )
         if normalized == "/help":
             return (
@@ -47,6 +49,8 @@ class OperationsController:
                 "after reviewing status."
             )
         if normalized == "/confirm_live":
+            if not self.startup_recovery_complete:
+                raise RuntimeError("Startup recovery has not completed successfully")
             if self.paused:
                 raise RuntimeError("Resume checks must pass before live activation")
             self.mode.confirm_live(
@@ -60,6 +64,8 @@ class OperationsController:
             self.paused = True
             return "New entries paused."
         if normalized == "/resume":
+            if not self.startup_recovery_complete:
+                raise RuntimeError("Cannot resume: startup recovery has not completed")
             if not broker_ready or not risk_clear:
                 raise RuntimeError("Cannot resume: broker readiness or risk checks failed")
             self.paused = False
