@@ -68,7 +68,8 @@ exchange lot sizes. Costs are tracked separately and must be included in the
 portfolio risk budget.
 
 The initial candidate factory is deliberately narrow: bullish trend can produce
-a bull-call debit vertical, and bearish trend can produce a bear-put debit
+a bull-call debit vertical and a protected bull-put credit vertical; bearish
+trend can produce a bear-put debit vertical and a protected bear-call credit
 vertical. It selects only current listed strikes from a validated option-chain
 snapshot and scales quantities in whole lots. Range, transition, volatility
 expansion and unknown regimes currently generate no candidate. Candidate
