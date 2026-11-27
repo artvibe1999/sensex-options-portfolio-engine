@@ -259,8 +259,8 @@ def build_application_from_settings(
                     settings=settings,
                     portfolio_snapshot_provider=portfolio_snapshot_provider,
                 )
-                from .broker_submission import DurableBrokerSubmissionService
                 from .broker_fill_ingestion import BrokerFillIngestionService
+                from .broker_submission import DurableBrokerSubmissionService
                 from .emergency_close import (
                     EmergencyCloseAllService,
                     build_emergency_limit_price_provider,
