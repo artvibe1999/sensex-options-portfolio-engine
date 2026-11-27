@@ -108,6 +108,12 @@ class FakeTradeHistory:
     def bind_ingestion(self, ingestion):
         self._ingestion = ingestion
 
+    def recover_pending(self):
+        return self._ingestion.recover_pending()
+
+    def has_pending_receipts(self):
+        return self._ingestion.has_pending_receipts()
+
 
 def build_coordinator(tmp_path, plans, *, max_close_replacements=1):
     store = SqliteStore(tmp_path / "live-execution.sqlite3")
