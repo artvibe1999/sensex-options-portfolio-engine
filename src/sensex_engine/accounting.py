@@ -62,11 +62,18 @@ class PortfolioAccountingService:
         amount = _decimal(amount, "opening_equity")
         if amount <= 0:
             raise ValueError("Opening equity must be positive")
+        payload = {"amount": str(amount), "currency": self.currency}
+        prior = next(
+            (e for e in self._events() if e["idempotency_key"] == f"account:{idempotency_key}"),
+            None,
+        )
+        if prior is not None:
+            if prior["event_type"] != "ACCOUNT_OPENED" or prior["payload"] != payload:
+                raise ValueError("Account ledger idempotency key conflicts with an existing event")
+            return False
         if any(e["event_type"] == "ACCOUNT_OPENED" for e in self._events()):
             raise ValueError("Opening equity is immutable once the account ledger is opened")
-        return self._append(idempotency_key, "ACCOUNT_OPENED", {
-            "amount": str(amount), "currency": self.currency,
-        })
+        return self._append(idempotency_key, "ACCOUNT_OPENED", payload)
 
     def record_cash_flow(
         self, amount: Decimal, *, direction: str, idempotency_key: str,
