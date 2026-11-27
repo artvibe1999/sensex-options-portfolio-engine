@@ -12,6 +12,7 @@ from typing import Any
 
 from .capital import adaptive_risk_budget, affordable_lots
 from .domain import PortfolioSnapshot
+from .filled_risk import filled_position_risk
 from .reconciliation import BrokerReconciliationService, ReconciliationReport
 
 ACCOUNT_ID = "account:default"
@@ -206,6 +207,11 @@ class PortfolioAccountingService:
             raise RuntimeError(
                 "Broker reconciliation failed: " + "; ".join(report.mismatches)
             )
+        derived_loss, derived_count = filled_position_risk(
+            position_lifecycle.active_snapshots(), contracts, mode="live",
+        )
+        if derived_loss != open_max_loss or derived_count != open_positions:
+            raise ValueError("Supplied risk disagrees with actual filled exposure")
         self.record_reconciled_mark(
             broker_net_equity=broker_net_equity,
             unrealized_pnl=unrealized_pnl,
