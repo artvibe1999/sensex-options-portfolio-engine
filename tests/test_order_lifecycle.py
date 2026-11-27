@@ -6,8 +6,8 @@ from sensex_engine.order_lifecycle import OrderLifecycle, OrderState
 from sensex_engine.persistence import SqliteStore
 
 
-def make_ledger(tmp_path):
-    store = SqliteStore(tmp_path / "orders.sqlite3")
+def make_ledger(tmp_path, database_name="orders.sqlite3"):
+    store = SqliteStore(tmp_path / database_name)
     ledger = OrderLifecycle(store)
     ledger.create_intent(
         order_id="internal-1",
@@ -147,38 +147,46 @@ def test_fill_idempotency_key_reuse_with_different_data_is_rejected(tmp_path):
 
 
 def test_database_guard_rejects_stale_transition_from_second_instance(tmp_path):
-    path = tmp_path / "shared.sqlite3"
-    first = make_ledger(tmp_path)
-    second = OrderLifecycle(SqliteStore(path))
-    assert first.transition(
+    ledger = make_ledger(tmp_path, "shared.sqlite3")
+    assert ledger.transition(
         order_id="internal-1", new_state=OrderState.VALIDATED, update_id="first"
     )
     with pytest.raises(RuntimeError, match="changed concurrently"):
-        second.transition(
-            order_id="internal-1", new_state=OrderState.REJECTED, update_id="stale"
+        ledger.store.append_order_event(
+            idempotency_key="stale-transition",
+            event_type="ORDER_STATE_CHANGED",
+            aggregate_id="internal-1",
+            expected_state=OrderState.CREATED.value,
+            payload={"order_id": "internal-1", "from_state": "CREATED",
+                     "state": "REJECTED", "message": "stale writer"},
         )
-    assert second.snapshot("internal-1")["state"] == "VALIDATED"
+    assert ledger.snapshot("internal-1")["state"] == "VALIDATED"
 
 
 def test_database_guard_prevents_cross_instance_fill_overrun(tmp_path):
-    path = tmp_path / "shared.sqlite3"
-    first = make_ledger(tmp_path)
-    second = OrderLifecycle(SqliteStore(path))
+    ledger = make_ledger(tmp_path, "shared.sqlite3")
     for state, update_id in (
         (OrderState.VALIDATED, "v1"),
         (OrderState.SUBMITTING, "s1"),
         (OrderState.ACKNOWLEDGED, "a1"),
     ):
-        first.transition(order_id="internal-1", new_state=state, update_id=update_id)
-    assert first.record_fill(
+        ledger.transition(order_id="internal-1", new_state=state, update_id=update_id)
+    assert ledger.record_fill(
         order_id="internal-1", fill_id="fill-a", quantity=15,
         price=Decimal("100"), filled_at="2026-11-27T10:00:00+05:30",
     )
     with pytest.raises(RuntimeError, match="changed concurrently"):
-        second.record_fill(
-            order_id="internal-1", fill_id="fill-b", quantity=10,
-            price=Decimal("101"), filled_at="2026-11-27T10:00:01+05:30",
+        ledger.store.append_order_event(
+            idempotency_key="stale-fill",
+            event_type="ORDER_FILL_RECORDED",
+            aggregate_id="internal-1",
+            expected_state=OrderState.ACKNOWLEDGED.value,
+            max_quantity=20,
+            fill_quantity=10,
+            payload={"order_id": "internal-1", "fill_id": "fill-b", "quantity": 10,
+                     "price": "101", "filled_at": "2026-11-27T10:00:01+05:30",
+                     "cumulative_filled_quantity": 25, "state": "FILLED"},
         )
-    snapshot = second.snapshot("internal-1")
+    snapshot = ledger.snapshot("internal-1")
     assert snapshot["filled_quantity"] == 15
     assert snapshot["remaining_quantity"] == 5
