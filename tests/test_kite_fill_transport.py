@@ -219,6 +219,11 @@ def test_current_session_backfill_includes_cancelled_live_orders_for_late_fills(
     orders, positions, ingestion = setup_live(tmp_path)
     orders.transition(
         order_id="internal-live-order",
+        new_state=OrderState.CANCEL_PENDING,
+        update_id="cancel-request",
+    )
+    orders.transition(
+        order_id="internal-live-order",
         new_state=OrderState.CANCELLED,
         update_id="cancel-ack",
     )
