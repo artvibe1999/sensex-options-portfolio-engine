@@ -168,7 +168,11 @@ class SqliteStore:
                 if expected_state is not None and current_state != expected_state:
                     raise RuntimeError("Order state changed concurrently; reload before retrying")
                 if fill_quantity:
-                    if current_state in {"FILLED", "CANCELLED", "REJECTED", "EXPIRED"}:
+                    if current_state in {"FILLED", "REJECTED", "EXPIRED"} or (
+                        current_state == "CANCELLED"
+                        and max_quantity is not None
+                        and filled >= max_quantity
+                    ):
                         raise ValueError("Cannot add a fill to a terminal order")
                     if max_quantity is None or filled + fill_quantity > max_quantity:
                         raise ValueError("Cumulative fills exceed requested order quantity")
