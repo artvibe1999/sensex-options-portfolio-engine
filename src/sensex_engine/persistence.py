@@ -1,10 +1,11 @@
 """Small durable SQLite event/audit store; broker state remains authoritative."""
 import json
 import sqlite3
+from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 
 class SqliteStore:
