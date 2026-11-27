@@ -16,6 +16,72 @@ class OrderStatus(StrEnum):
     CANCELLED = "CANCELLED"
 
 
+class ExecutionPhase(StrEnum):
+    OPEN = "OPEN"
+    CLOSE = "CLOSE"
+
+
+@dataclass(frozen=True)
+class LegExecutionAction:
+    """One leg action in a protective multi-leg execution sequence."""
+
+    leg_index: int
+    instrument_token: int
+    tradingsymbol: str
+    side: str
+    quantity: int
+
+
+def build_leg_execution_plan(
+    position: Position, phase: ExecutionPhase
+) -> tuple[LegExecutionAction, ...]:
+    """Order protective legs before risk-increasing legs.
+
+    Opening: buy protective legs before submitting short legs.
+    Closing: buy back original short legs before selling protective longs.
+    This is a planning primitive only; it does not submit, retry, or confirm orders.
+    """
+    if not position.legs:
+        raise ValueError("Cannot plan execution for a position without legs")
+
+    tokens: set[int] = set()
+    symbols: set[str] = set()
+    indexed_legs = list(enumerate(position.legs))
+    for _, leg in indexed_legs:
+        token = leg.contract.instrument_token
+        symbol = leg.contract.tradingsymbol.strip()
+        if token <= 0 or not symbol:
+            raise ValueError("Execution plan requires valid contract identity")
+        if token in tokens or symbol in symbols:
+            raise ValueError("Execution plan contains duplicate contract legs")
+        tokens.add(token)
+        symbols.add(symbol)
+
+    if phase is ExecutionPhase.OPEN:
+        ordered = sorted(indexed_legs, key=lambda item: (
+            0 if item[1].side.value == "BUY" else 1, item[0]
+        ))
+        action = lambda side: side.value
+    elif phase is ExecutionPhase.CLOSE:
+        ordered = sorted(indexed_legs, key=lambda item: (
+            0 if item[1].side.value == "SELL" else 1, item[0]
+        ))
+        action = lambda side: "SELL" if side.value == "BUY" else "BUY"
+    else:
+        raise ValueError("Unsupported execution phase")
+
+    return tuple(
+        LegExecutionAction(
+            leg_index=index,
+            instrument_token=leg.contract.instrument_token,
+            tradingsymbol=leg.contract.tradingsymbol,
+            side=action(leg.side),
+            quantity=leg.lots * leg.contract.lot_size,
+        )
+        for index, leg in ordered
+    )
+
+
 @dataclass(frozen=True)
 class OrderResult:
     order_id: str
