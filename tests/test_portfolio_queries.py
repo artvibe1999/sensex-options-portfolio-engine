@@ -80,3 +80,46 @@ def test_invalid_output_limits_are_rejected(tmp_path):
         assert "limits" in str(exc)
     else:
         raise AssertionError("invalid output limits must fail")
+
+
+def test_accounting_reports_are_unavailable_until_fresh_reconciled_mark(tmp_path):
+    from decimal import Decimal
+    from sensex_engine.accounting import PortfolioAccountingService
+
+    store = SqliteStore(tmp_path / "accounting-queries.sqlite3")
+    accounting = PortfolioAccountingService(store=store)
+    queries = PortfolioQueryService(
+        positions=PositionLifecycle(store), orders=OrderLifecycle(store),
+        accounting=accounting,
+    )
+    assert "LIVE readiness remains blocked" in queries.pnl_text()
+    accounting.set_opening_equity(Decimal("50000"), idempotency_key="opening")
+    assert "LIVE readiness remains blocked" in queries.capital_text()
+
+
+def test_accounting_telegram_views_render_reconciled_values(tmp_path):
+    from datetime import UTC, datetime
+    from decimal import Decimal
+    from sensex_engine.accounting import PortfolioAccountingService
+
+    store = SqliteStore(tmp_path / "accounting-queries-ready.sqlite3")
+    accounting = PortfolioAccountingService(store=store)
+    now = datetime.now(UTC)
+    accounting.set_opening_equity(Decimal("50000"), idempotency_key="opening")
+    accounting.record_trade_result(
+        realized_pnl=Decimal("500"), fees=Decimal("50"),
+        idempotency_key="trade", occurred_at=now,
+    )
+    accounting.record_reconciled_mark(
+        broker_net_equity=Decimal("50450"), unrealized_pnl=Decimal("0"),
+        available_margin=Decimal("30000"), open_max_loss=Decimal("0"),
+        open_positions=0, entries_today=1, reconciliation_id="verified",
+        broker_positions_hash="sha256:flat", marked_at=now,
+    )
+    queries = PortfolioQueryService(
+        positions=PositionLifecycle(store), orders=OrderLifecycle(store),
+        accounting=accounting,
+    )
+    assert "Realised net P&L: 450" in queries.pnl_text()
+    assert "Net liquidation equity: 50450" in queries.capital_text()
+    assert "Open defined max loss: 0" in queries.risk_text()
