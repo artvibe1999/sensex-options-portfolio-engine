@@ -6,7 +6,6 @@ requires exact tag + contract/order-field agreement. Ambiguity is never retried.
 """
 from __future__ import annotations
 
-import re
 import time
 from decimal import Decimal, InvalidOperation
 from hashlib import sha256
@@ -50,7 +49,7 @@ class KiteOrderExecutionAdapter:
             raise ValueError("Order quantity must be a positive whole number of current lots")
         tag = self.tag_for_client_key(client_order_key)
 
-        existing = self.find_orders_by_client_key(client_order_key)
+        existing = self.find_orders_by_client_key(client_order_key, expected_action=action)
         if existing:
             if len(existing) != 1:
                 raise RuntimeError("Client tag is ambiguous in Kite order book; manual recovery required")
@@ -76,7 +75,7 @@ class KiteOrderExecutionAdapter:
         return BrokerOrderReceipt(broker_order_id, BrokerOrderStatus.ACCEPTED)
 
     def find_orders_by_client_key(
-        self, client_order_key: str
+        self, client_order_key: str, *, expected_action: LegExecutionAction | None = None
     ) -> tuple[BrokerOrderReceipt, ...]:
         tag = self.tag_for_client_key(client_order_key)
         rows = self._client.orders()
@@ -84,14 +83,24 @@ class KiteOrderExecutionAdapter:
             raise ValueError("Kite order book response must be a list")
         matches = [row for row in rows if isinstance(row, dict) and row.get("tag") == tag]
         receipts: list[BrokerOrderReceipt] = []
+        contracts = self._market_data.instruments() if matches else []
         for row in matches:
             order_id = row.get("order_id")
             if not isinstance(order_id, str) or not order_id.strip():
                 raise ValueError("Kite order-book match has no valid order ID")
+            symbol = row.get("tradingsymbol")
+            contract_matches = [item for item in contracts if item.tradingsymbol == symbol]
+            if row.get("exchange") != "BFO" or len(contract_matches) != 1:
+                raise ValueError("Client tag match is not a current BFO SENSEX option")
+            contract = contract_matches[0]
+            if expected_action is not None:
+                self._assert_order_matches(row, action=expected_action, contract=contract, tag=tag)
+            else:
+                quantity = int(row.get("quantity") or 0)
+                if row.get("transaction_type") not in {"BUY", "SELL"} or quantity <= 0 or quantity % contract.lot_size:
+                    raise ValueError("Client tag match has invalid side or lot quantity")
             status = self._map_status(row.get("status"))
-            receipts.append(BrokerOrderReceipt(
-                order_id, status, str(row.get("status_message") or "")[:500]
-            ))
+            receipts.append(BrokerOrderReceipt(order_id, status, str(row.get("status_message") or "")[:500]))
         return tuple(receipts)
 
     def cancel_order(
