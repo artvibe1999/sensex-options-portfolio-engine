@@ -1,0 +1,262 @@
+"""Durable, broker-agnostic order-intent and fill lifecycle.
+
+This module records lifecycle facts only. It deliberately does not submit broker orders.
+The current process is single-writer; multi-process execution requires database-level
+transactional transition guards before it can be enabled.
+"""
+from __future__ import annotations
+
+from decimal import Decimal, InvalidOperation
+from enum import StrEnum
+from threading import RLock
+from typing import Any
+
+from .persistence import SqliteStore
+
+
+class OrderState(StrEnum):
+    CREATED = "CREATED"
+    VALIDATED = "VALIDATED"
+    SUBMITTING = "SUBMITTING"
+    ACKNOWLEDGED = "ACKNOWLEDGED"
+    OPEN = "OPEN"
+    PARTIALLY_FILLED = "PARTIALLY_FILLED"
+    FILLED = "FILLED"
+    CANCEL_PENDING = "CANCEL_PENDING"
+    CANCELLED = "CANCELLED"
+    REJECTED = "REJECTED"
+    EXPIRED = "EXPIRED"
+    UNKNOWN = "UNKNOWN"
+    RECOVERY_REQUIRED = "RECOVERY_REQUIRED"
+
+
+_TERMINAL = {OrderState.FILLED, OrderState.CANCELLED, OrderState.REJECTED, OrderState.EXPIRED}
+_ALLOWED: dict[OrderState, set[OrderState]] = {
+    OrderState.CREATED: {OrderState.VALIDATED, OrderState.REJECTED},
+    OrderState.VALIDATED: {OrderState.SUBMITTING, OrderState.REJECTED},
+    OrderState.SUBMITTING: {
+        OrderState.ACKNOWLEDGED, OrderState.OPEN, OrderState.PARTIALLY_FILLED,
+        OrderState.FILLED, OrderState.REJECTED, OrderState.UNKNOWN,
+        OrderState.RECOVERY_REQUIRED,
+    },
+    OrderState.ACKNOWLEDGED: {
+        OrderState.OPEN, OrderState.PARTIALLY_FILLED, OrderState.FILLED,
+        OrderState.CANCEL_PENDING, OrderState.REJECTED, OrderState.UNKNOWN,
+        OrderState.RECOVERY_REQUIRED,
+    },
+    OrderState.OPEN: {
+        OrderState.PARTIALLY_FILLED, OrderState.FILLED, OrderState.CANCEL_PENDING,
+        OrderState.CANCELLED, OrderState.EXPIRED, OrderState.UNKNOWN,
+        OrderState.RECOVERY_REQUIRED,
+    },
+    OrderState.PARTIALLY_FILLED: {
+        OrderState.PARTIALLY_FILLED, OrderState.FILLED, OrderState.CANCEL_PENDING,
+        OrderState.CANCELLED, OrderState.EXPIRED, OrderState.UNKNOWN,
+        OrderState.RECOVERY_REQUIRED,
+    },
+    OrderState.CANCEL_PENDING: {
+        OrderState.PARTIALLY_FILLED, OrderState.FILLED, OrderState.CANCELLED,
+        OrderState.UNKNOWN, OrderState.RECOVERY_REQUIRED,
+    },
+    OrderState.UNKNOWN: {
+        OrderState.ACKNOWLEDGED, OrderState.OPEN, OrderState.PARTIALLY_FILLED,
+        OrderState.FILLED, OrderState.CANCELLED, OrderState.REJECTED,
+        OrderState.RECOVERY_REQUIRED,
+    },
+    OrderState.RECOVERY_REQUIRED: {
+        OrderState.ACKNOWLEDGED, OrderState.OPEN, OrderState.PARTIALLY_FILLED,
+        OrderState.FILLED, OrderState.CANCELLED, OrderState.REJECTED,
+        OrderState.UNKNOWN,
+    },
+    OrderState.FILLED: set(),
+    OrderState.CANCELLED: set(),
+    OrderState.REJECTED: set(),
+    OrderState.EXPIRED: set(),
+}
+
+
+class OrderLifecycle:
+    """Append-only order lifecycle ledger backed by the portfolio event store."""
+
+    def __init__(self, store: SqliteStore) -> None:
+        self.store = store
+        self._lock = RLock()
+
+    def create_intent(
+        self,
+        *,
+        order_id: str,
+        position_id: str,
+        leg_index: int,
+        instrument_token: int,
+        tradingsymbol: str,
+        side: str,
+        quantity: int,
+        order_type: str,
+        product: str,
+        mode: str,
+        idempotency_key: str,
+    ) -> bool:
+        if not all(value.strip() for value in (
+            order_id, position_id, tradingsymbol, side, order_type, product, mode,
+            idempotency_key,
+        )):
+            raise ValueError("Order intent identity and contract fields are required")
+        if leg_index < 0 or instrument_token <= 0 or quantity <= 0:
+            raise ValueError("Order intent leg, token and quantity must be valid")
+        if side.upper() not in {"BUY", "SELL"}:
+            raise ValueError("Order side must be BUY or SELL")
+        if mode.lower() not in {"paper", "live"}:
+            raise ValueError("Order mode must be paper or live")
+        with self._lock:
+            existing = self.snapshot(order_id)
+            if existing is not None:
+                raise ValueError("Order intent already exists")
+            return self.store.append_event(
+                idempotency_key=idempotency_key,
+                event_type="ORDER_INTENT_CREATED",
+                aggregate_id=order_id,
+                payload={
+                    "order_id": order_id,
+                    "position_id": position_id,
+                    "leg_index": leg_index,
+                    "instrument_token": instrument_token,
+                    "tradingsymbol": tradingsymbol,
+                    "side": side.upper(),
+                    "quantity": quantity,
+                    "order_type": order_type.upper(),
+                    "product": product.upper(),
+                    "mode": mode.lower(),
+                    "state": OrderState.CREATED.value,
+                    "filled_quantity": 0,
+                },
+            )
+
+    def transition(
+        self,
+        *,
+        order_id: str,
+        new_state: OrderState,
+        update_id: str,
+        broker_order_id: str | None = None,
+        message: str = "",
+    ) -> bool:
+        if not order_id.strip() or not update_id.strip():
+            raise ValueError("Order and update identities are required")
+        with self._lock:
+            current = self.snapshot(order_id)
+            if current is None:
+                raise ValueError("Unknown order intent")
+            old_state = OrderState(current["state"])
+            if new_state == old_state:
+                return False
+            if new_state not in _ALLOWED[old_state]:
+                raise ValueError(f"Invalid order transition: {old_state} -> {new_state}")
+            payload: dict[str, Any] = {
+                "order_id": order_id,
+                "from_state": old_state.value,
+                "state": new_state.value,
+                "message": message[:500],
+            }
+            if broker_order_id:
+                payload["broker_order_id"] = broker_order_id
+            return self.store.append_event(
+                idempotency_key=f"order-update:{order_id}:{update_id}",
+                event_type="ORDER_STATE_CHANGED",
+                aggregate_id=order_id,
+                payload=payload,
+            )
+
+    def record_fill(
+        self,
+        *,
+        order_id: str,
+        fill_id: str,
+        quantity: int,
+        price: Decimal,
+        filled_at: str,
+    ) -> bool:
+        if not order_id.strip() or not fill_id.strip() or not filled_at.strip():
+            raise ValueError("Order, fill and timestamp identities are required")
+        try:
+            fill_price = Decimal(price)
+        except (InvalidOperation, TypeError, ValueError) as exc:
+            raise ValueError("Fill price must be a valid decimal") from exc
+        if quantity <= 0 or not fill_price.is_finite() or fill_price <= 0:
+            raise ValueError("Fill quantity and price must be positive")
+        with self._lock:
+            current = self.snapshot(order_id)
+            if current is None:
+                raise ValueError("Unknown order intent")
+            state = OrderState(current["state"])
+            if state in _TERMINAL:
+                raise ValueError("Cannot add a fill to a terminal order")
+            total = int(current["filled_quantity"]) + quantity
+            requested = int(current["quantity"])
+            if total > requested:
+                raise ValueError("Cumulative fills exceed requested order quantity")
+            new_state = OrderState.FILLED if total == requested else OrderState.PARTIALLY_FILLED
+            if new_state != state and new_state not in _ALLOWED[state]:
+                raise ValueError(f"Order state cannot accept a fill from {state}")
+            payload = {
+                "order_id": order_id,
+                "fill_id": fill_id,
+                "quantity": quantity,
+                "price": str(fill_price),
+                "filled_at": filled_at,
+                "cumulative_filled_quantity": total,
+                "state": new_state.value,
+            }
+            key = f"broker-fill:{fill_id}"
+            created = self.store.append_event(
+                idempotency_key=key,
+                event_type="ORDER_FILL_RECORDED",
+                aggregate_id=order_id,
+                payload=payload,
+            )
+            if not created:
+                prior = next(
+                    (event for event in self.store.events_for(order_id)
+                     if event["idempotency_key"] == key),
+                    None,
+                )
+                if prior is None or prior["payload"] != payload:
+                    raise ValueError("Fill idempotency key conflicts with existing fill")
+            return created
+
+    def snapshot(self, order_id: str) -> dict[str, Any] | None:
+        events = self.store.events_for(order_id)
+        if not events:
+            return None
+        created = next(
+            (event for event in events if event["event_type"] == "ORDER_INTENT_CREATED"),
+            None,
+        )
+        if created is None:
+            return None
+        state = dict(created["payload"])
+        for event in events:
+            payload = event["payload"]
+            if event["event_type"] == "ORDER_STATE_CHANGED":
+                state["state"] = payload["state"]
+                if "broker_order_id" in payload:
+                    state["broker_order_id"] = payload["broker_order_id"]
+                state["last_message"] = payload.get("message", "")
+            elif event["event_type"] == "ORDER_FILL_RECORDED":
+                state["filled_quantity"] = payload["cumulative_filled_quantity"]
+                state["state"] = payload["state"]
+                state["average_fill_price"] = self._average_fill_price(events)
+        state["remaining_quantity"] = int(state["quantity"]) - int(state["filled_quantity"])
+        return state
+
+    @staticmethod
+    def _average_fill_price(events: list[dict[str, Any]]) -> str | None:
+        fills = [event["payload"] for event in events
+                 if event["event_type"] == "ORDER_FILL_RECORDED"]
+        quantity = sum(int(fill["quantity"]) for fill in fills)
+        if not quantity:
+            return None
+        value = sum(
+            Decimal(fill["price"]) * int(fill["quantity"]) for fill in fills
+        ) / Decimal(quantity)
+        return str(value)
