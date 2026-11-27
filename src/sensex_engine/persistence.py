@@ -92,10 +92,26 @@ class SqliteStore:
         if not idempotency_key.strip() or not event_type.strip() or not aggregate_id.strip():
             raise ValueError("Event identity fields are required")
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
-        with self._connection() as connection:
-            cursor = connection.execute(
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            prior = connection.execute(
+                "SELECT event_type, aggregate_id, payload_json FROM portfolio_events "
+                "WHERE idempotency_key = ?",
+                (idempotency_key,),
+            ).fetchone()
+            if prior is not None:
+                if (
+                    prior["event_type"] != event_type
+                    or prior["aggregate_id"] != aggregate_id
+                    or prior["payload_json"] != encoded
+                ):
+                    raise ValueError("Event idempotency key conflicts with an existing event")
+                connection.commit()
+                return False
+            connection.execute(
                 """
-                INSERT OR IGNORE INTO portfolio_events
+                INSERT INTO portfolio_events
                     (idempotency_key, event_type, aggregate_id, payload_json, created_at)
                 VALUES (?, ?, ?, ?, ?)
                 """,
@@ -107,7 +123,13 @@ class SqliteStore:
                     datetime.now(UTC).isoformat(),
                 ),
             )
-            return cursor.rowcount == 1
+            connection.commit()
+            return True
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
 
 
     def append_order_event(
