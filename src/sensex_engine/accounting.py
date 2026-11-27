@@ -120,6 +120,20 @@ class PortfolioAccountingService:
             "broker_trade_ids": sorted(set(str(x) for x in broker_trade_ids)),
         })
 
+    def ledger_equity(self, unrealized: Decimal) -> Decimal:
+        total = Decimal("0")
+        for event in self._events():
+            payload = event["payload"]
+            if event["event_type"] == "ACCOUNT_OPENED":
+                total += _decimal(payload["amount"], "opening equity")
+            elif event["event_type"] == "ACCOUNT_CASH_FLOW":
+                sign = 1 if payload["direction"] == "DEPOSIT" else -1
+                total += sign * _decimal(payload["amount"], "cash flow")
+            elif event["event_type"] == "ACCOUNT_TRADE_RESULT":
+                total += _decimal(payload["realized_pnl"], "realized pnl")
+                total -= _decimal(payload["fees"], "fees")
+        return total + _decimal(unrealized, "unrealized pnl")
+
     def invalidate_mark(self) -> None:
         self._append(str(uuid4()), "ACCOUNT_MARK_INVALIDATED", {})
 
@@ -305,7 +319,7 @@ class PortfolioAccountingService:
             for e in marks
         )
         current_adjusted_equity = equity - deposits + withdrawals
-        adjusted_peak = max((v for _, v in mark_rows), default=current_adjusted_equity)
+        adjusted_peak = max(opening, current_adjusted_equity, *(v for _, v in mark_rows))
         # Scale the flow-neutral peak back to current account equity so risk sizing
         # uses actual capital while the drawdown ratio excludes external cash flows.
         peak = (
@@ -316,18 +330,33 @@ class PortfolioAccountingService:
         month_start = today.replace(day=1)
         def period_drawdown(start: date) -> Decimal:
             period_values = [v for t, v in mark_rows if t.astimezone(IST).date() >= start]
+            prior = [v for t, v in mark_rows if t.astimezone(IST).date() < start]
+            period_values.append(prior[-1] if prior else opening)
             if not period_values or current_adjusted_equity <= 0:
                 return Decimal("0") if current_adjusted_equity > 0 else Decimal("1")
             high = max(period_values)
             return max(
                 Decimal("0"), (high - current_adjusted_equity) / high
             ) if high > 0 else Decimal("1")
+        prior_day_marks = [e["payload"] for e in marks if datetime.fromisoformat(
+            e["payload"]["marked_at"]
+        ).astimezone(IST).date() < today]
+        prior_day = max(prior_day_marks, key=lambda x: x["marked_at"], default=None)
+        start_equity = (
+            _decimal(prior_day["broker_net_equity"], "start of day equity")
+            if prior_day else opening
+        )
+        prior_unrealized = (
+            _decimal(prior_day["unrealized_pnl"], "previous unrealized pnl")
+            if prior_day else Decimal("0")
+        )
         return PortfolioSnapshot(
             net_liquidation_equity=equity,
             available_margin=_decimal(mark["available_margin"], "available_margin"),
             open_max_loss=_decimal(mark["open_max_loss"], "open_max_loss"),
             daily_realized_pnl=daily_realized,
-            daily_unrealized_pnl=_decimal(mark["unrealized_pnl"], "unrealized_pnl"),
+            daily_unrealized_pnl=unrealized - prior_unrealized,
+            start_of_day_equity=start_equity,
             weekly_drawdown_pct=period_drawdown(week_start),
             monthly_drawdown_pct=period_drawdown(month_start),
             open_positions=int(mark["open_positions"]),
@@ -436,7 +465,7 @@ class PortfolioAccountingService:
             "realized_net_pnl": str(pnl),
             "fees_and_taxes": str(fees),
             "cash_balance": str(latest.get("actual_cash") or cash_balance),
-            "unrealized_pnl": str(snapshot.daily_unrealized_pnl),
+            "unrealized_pnl": str(latest["unrealized_pnl"]),
             "net_liquidation_equity": str(snapshot.net_liquidation_equity),
             "available_margin": str(snapshot.available_margin),
             "open_max_loss": str(snapshot.open_max_loss),
