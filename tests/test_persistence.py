@@ -46,3 +46,46 @@ def test_event_requires_identity_fields(tmp_path):
             aggregate_id="position-1",
             payload={},
         )
+
+
+def test_broker_fill_inbox_fences_stale_worker_claims(tmp_path):
+    path = tmp_path / "fill-inbox.sqlite3"
+    store = SqliteStore(path)
+    assert store.receive_broker_fill(
+        event_key="order-1:trade-1",
+        payload={"quantity": 1, "price": "100"},
+    )
+    first = store.claim_broker_fill(event_key="order-1:trade-1", lease_seconds=1)
+    assert first["attempts"] == 1
+
+    connection = store._connect()
+    try:
+        connection.execute(
+            "UPDATE broker_fill_inbox SET updated_at = '2000-01-01T00:00:00+00:00' "
+            "WHERE event_key = ?",
+            ("order-1:trade-1",),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    second = store.claim_broker_fill(event_key="order-1:trade-1", lease_seconds=1)
+    assert second["attempts"] == 2
+
+    with pytest.raises(RuntimeError, match="not claimed"):
+        store.fail_broker_fill(
+            event_key="order-1:trade-1", attempt=1, error="stale worker failure"
+        )
+    with pytest.raises(RuntimeError, match="not claimed"):
+        store.complete_broker_fill(
+            event_key="order-1:trade-1",
+            attempt=1,
+            result={"status": "stale"},
+        )
+
+    store.complete_broker_fill(
+        event_key="order-1:trade-1",
+        attempt=2,
+        result={"status": "processed"},
+    )
+    assert store.broker_fill_receipt("order-1:trade-1")["status"] == "PROCESSED"
