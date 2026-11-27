@@ -34,8 +34,8 @@ def test_sizing_recalculates_payoff_and_margin_at_actual_quantity():
 
         def quotes(self, tokens):
             return {
-                1: Quote(1, now, Decimal("100"), Decimal("99"), Decimal("100"), 50, 50, 500),
-                2: Quote(2, now, Decimal("90"), Decimal("90"), Decimal("91"), 50, 50, 500),
+                1: Quote(1, now, Decimal("100"), Decimal("99"), Decimal("100"), 100, 100, 500),
+                2: Quote(2, now, Decimal("90"), Decimal("90"), Decimal("91"), 100, 100, 500),
             }
 
         def basket_margin(self, legs, prices):
@@ -53,6 +53,13 @@ def test_sizing_recalculates_payoff_and_margin_at_actual_quantity():
     assert approved.max_loss == Decimal("600")
     assert approved.estimated_costs == Decimal("30")
     assert prices == {1: Decimal("100"), 2: Decimal("90")}
+
+    sizing = EntrySizingService(
+        broker=Broker(), snapshot_provider=lambda: snapshot, risk=RiskEngine(),
+        quantity_freeze_units=40,
+    )
+    capped, _ = sizing.approve(candidate, max_lots=10, allocation_pct=Decimal(".5"))
+    assert capped.legs[0].lots == 2
 
     sizing = EntrySizingService(
         broker=Broker(), snapshot_provider=lambda: None, risk=RiskEngine(),
