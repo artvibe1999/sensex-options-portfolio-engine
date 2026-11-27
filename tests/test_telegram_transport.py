@@ -92,7 +92,7 @@ def test_resume_requires_explicit_readiness_provider(tmp_path):
     update, message = _update(104, "/resume")
     asyncio.run(dispatch_command(update, None, operations=operations, store=store))
     assert operations.paused
-    assert "readiness" in message.replies[0]
+    assert "startup recovery" in message.replies[0]
 
     operations.startup_recovery_complete = True
     update, message = _update(105, "/resume")
