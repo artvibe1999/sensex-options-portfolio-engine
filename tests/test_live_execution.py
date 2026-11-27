@@ -74,6 +74,7 @@ class FakeTradeHistory:
         self.orders = orders
         self.positions = positions
         self.poll_calls = []
+        self.pending = False
 
     def poll(self, order_ids):
         self.poll_calls.extend(order_ids)
@@ -112,7 +113,7 @@ class FakeTradeHistory:
         return self._ingestion.recover_pending()
 
     def has_pending_receipts(self):
-        return self._ingestion.has_pending_receipts()
+        return self.pending or self._ingestion.has_pending_receipts()
 
 
 def build_coordinator(tmp_path, plans, *, max_close_replacements=1):
@@ -255,3 +256,14 @@ def test_broker_complete_without_trade_ledger_fill_does_not_advance(tmp_path):
     assert report.blocked
     assert len(broker.submit_calls) == 1
     assert positions.snapshot(str(position.position_id))["status"] == "ERROR"
+
+
+
+def test_pending_fill_projection_blocks_any_new_broker_action(tmp_path):
+    coordinator, _, _, broker, history = build_coordinator(
+        tmp_path, [{"fills": [(20, "100.00")]}]
+    )
+    history.pending = True
+    with pytest.raises(RuntimeError, match="pending receipts"):
+        coordinator.execute(make_position(), ExecutionPhase.OPEN)
+    assert broker.submit_calls == []
