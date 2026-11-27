@@ -29,7 +29,7 @@ class PortfolioQueryService:
         if not snapshots:
             return (
                 "Internal position ledger: no active positions recorded. "
-                "This is not a broker reconciliation result."
+                "This is not broker-confirmed or a reconciliation result."
             )
         lines = ["Internal position ledger (not broker-confirmed):"]
         for item in snapshots[: self.max_items]:
@@ -60,7 +60,7 @@ class PortfolioQueryService:
         if not snapshots:
             return (
                 "Internal order ledger: no order intents recorded. "
-                "This is not a broker order-book result."
+                "This is not broker-confirmed or a broker order-book result."
             )
         lines = ["Internal order ledger (not broker-confirmed):"]
         for item in snapshots[: self.max_items]:
@@ -96,4 +96,4 @@ class PortfolioQueryService:
     def _limit(self, value: str) -> str:
         if len(value) <= self.max_message_chars:
             return value
-        return value[: self.max_message_chars - 20] + "\n... output truncated"
+        suffix = "\n... output truncated"\n        return value[: self.max_message_chars - len(suffix)] + suffix
