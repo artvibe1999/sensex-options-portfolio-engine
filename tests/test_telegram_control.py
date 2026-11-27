@@ -88,5 +88,22 @@ def test_authorized_read_only_positions_and_orders_commands_use_internal_ledgers
 
 
 def test_account_queries_remain_disabled_without_authoritative_services():
-    with pytest.raises(NotImplementedError, match="authoritative account"):
+    with pytest.raises(NotImplementedError, match="Account reporting services"):
         make_ops().handle("/pnl", user_id=11, chat_id=22)
+
+
+
+def test_authorized_account_commands_use_fail_closed_accounting_reports(tmp_path):
+    from sensex_engine.accounting import PortfolioAccountingService
+
+    store = SqliteStore(tmp_path / "telegram-accounting.sqlite3")
+    queries = PortfolioQueryService(
+        positions=PositionLifecycle(store),
+        orders=OrderLifecycle(store),
+        accounting=PortfolioAccountingService(store=store),
+    )
+    ops = make_ops()
+    ops.portfolio_queries = queries
+    for command in ("/pnl", "/capital", "/risk"):
+        response = ops.handle(command, user_id=11, chat_id=22)
+        assert "LIVE readiness remains blocked" in response
