@@ -104,3 +104,22 @@ def test_position_rejects_duplicate_leg_indexes_and_bad_contracts(tmp_path):
                  "side": "SELL", "quantity": 1},
             ],
         )
+
+
+
+def test_late_open_fill_after_flattening_reopens_position_as_closing(tmp_path):
+    lifecycle = make_position(tmp_path)
+    fill(lifecycle, leg=0, phase="OPEN", fill_id="o1", quantity=10)
+    fill(lifecycle, leg=1, phase="OPEN", fill_id="o2", quantity=10)
+    lifecycle.transition(position_id="position-1", status="CLOSING", update_id="close")
+    fill(lifecycle, leg=1, phase="CLOSE", fill_id="c1", quantity=10)
+    fill(lifecycle, leg=0, phase="CLOSE", fill_id="c2", quantity=10)
+    assert lifecycle.snapshot("position-1")["status"] == "CLOSED"
+
+    # A trade-history update can arrive after the cancel/close sequence was
+    # reconciled. Re-open the durable exposure state rather than dropping it.
+    fill(lifecycle, leg=0, phase="OPEN", fill_id="late-open", quantity=5)
+    snapshot = lifecycle.snapshot("position-1")
+    assert snapshot["status"] == "CLOSING"
+    assert snapshot["legs"][0]["remaining_quantity"] == 5
+    assert snapshot["is_fully_closed"] is False
