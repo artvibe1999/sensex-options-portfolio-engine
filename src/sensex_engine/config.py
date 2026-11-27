@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_allowed_user_ids: str = ""
     telegram_allowed_chat_ids: str = ""
+    kite_api_key: str = ""
+    kite_access_token: str = ""
 
     # Environment configuration can never silently boot the process into live mode.
     trading_mode: Literal["paper", "live"] = "paper"
