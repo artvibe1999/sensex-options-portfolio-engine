@@ -147,3 +147,42 @@ def operations_from_settings(settings: Any) -> OperationsController:
         chat_ids=parse_id_allowlist(settings.telegram_allowed_chat_ids),
     )
     return OperationsController(allowlist=allowlist, mode=ModeController())
+
+
+def _sqlite_database_path(database_url: str) -> str:
+    if database_url == "sqlite:///:memory:":
+        return ":memory:"
+    if database_url.startswith("sqlite:////"):
+        return "/" + database_url[len("sqlite:////"):]
+    if database_url.startswith("sqlite:///"):
+        return database_url[len("sqlite:///"):]
+    raise ValueError("Telegram transport currently requires a SQLite DATABASE_URL")
+
+
+def build_application_from_settings(settings: Any) -> Any:
+    """Build the actual polling application from environment-backed settings.
+
+    This default entrypoint deliberately supplies no readiness provider, so
+    /resume and /confirm_live remain disabled until real safety services exist.
+    """
+    operations = operations_from_settings(settings)
+    if not operations.allowlist.user_ids or not operations.allowlist.chat_ids:
+        raise ValueError("Telegram user and chat allowlists must both be configured")
+    store = SqliteStore(_sqlite_database_path(settings.database_url))
+    return create_telegram_application(
+        settings.telegram_bot_token,
+        operations=operations,
+        store=store,
+    )
+
+
+def run_from_environment() -> None:
+    """Run the Telegram polling process in paper-only fail-closed configuration."""
+    from .config import Settings
+
+    application = build_application_from_settings(Settings())
+    application.run_polling()
+
+
+if __name__ == "__main__":
+    run_from_environment()
