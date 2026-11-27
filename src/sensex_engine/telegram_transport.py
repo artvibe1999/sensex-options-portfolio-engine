@@ -1,4 +1,5 @@
 """Optional python-telegram-bot transport with audited, fail-closed dispatch."""
+import asyncio
 import logging
 from collections.abc import Callable
 from datetime import datetime
@@ -74,14 +75,31 @@ async def dispatch_command(
             broker_ready, risk_clear = False, False
 
     try:
-        response = operations.handle(
-            command,
-            user_id=user_id,
-            chat_id=chat_id,
-            broker_ready=broker_ready,
-            risk_clear=risk_clear,
-        )
-        outcome = "ACCEPTED"
+        if command in {"/closeall", "/emergency"}:
+            if not operations.allowlist.allows(user_id, chat_id):
+                raise PermissionError("Telegram user/chat is not authorized")
+            operations.paused = True
+            operations.mode.force_paper()
+            emergency = operations.emergency_close_all
+            if emergency is None:
+                response = (
+                    "Emergency halt applied: entries are paused and mode is PAPER. "
+                    "Kite emergency execution is unavailable; no broker order was sent."
+                )
+                outcome = "BLOCKED"
+            else:
+                report = await asyncio.to_thread(emergency.execute)
+                response = report.to_text()
+                outcome = "ACCEPTED" if report.completed else "INCOMPLETE"
+        else:
+            response = operations.handle(
+                command,
+                user_id=user_id,
+                chat_id=chat_id,
+                broker_ready=broker_ready,
+                risk_clear=risk_clear,
+            )
+            outcome = "ACCEPTED"
     except PermissionError:
         response, outcome = "Command rejected: user or chat is not authorized.", "DENIED"
     except NotImplementedError:
@@ -241,6 +259,48 @@ def build_application_from_settings(
                     settings=settings,
                     portfolio_snapshot_provider=portfolio_snapshot_provider,
                 )
+                from .broker_submission import DurableBrokerSubmissionService
+                from .broker_fill_ingestion import BrokerFillIngestionService
+                from .emergency_close import (
+                    EmergencyCloseAllService,
+                    build_emergency_limit_price_provider,
+                )
+                from .fill_coordinator import FillCoordinator
+                from .kite_fill_transport import KiteTradeHistoryIngestor
+                from .live_execution import LiveMultiLegExecutionCoordinator
+
+                submission = DurableBrokerSubmissionService(
+                    orders, order_execution_adapter, live_submission_enabled=True,
+                )
+                ingestion = BrokerFillIngestionService(FillCoordinator(orders, positions))
+                trade_history = KiteTradeHistoryIngestor(
+                    client=runtime_broker,
+                    orders=orders,
+                    positions=positions,
+                    ingestion=ingestion,
+                )
+                coordinator = LiveMultiLegExecutionCoordinator(
+                    orders=orders,
+                    positions=positions,
+                    submission=submission,
+                    trade_history=trade_history,
+                    limit_price=build_emergency_limit_price_provider(runtime_broker),
+                    live_execution_enabled=True,
+                )
+                operations.emergency_close_all = EmergencyCloseAllService(
+                    operations=operations,
+                    broker=runtime_broker,
+                    contracts_provider=runtime_broker.instruments,
+                    orders=orders,
+                    positions=positions,
+                    submission=submission,
+                    trade_history=trade_history,
+                    coordinator=coordinator,
+                    store=store,
+                    static_ip_confirmed=(
+                        getattr(settings, "kite_static_ip_confirmed", False) is True
+                    ),
+                )
                 readiness_provider = live_readiness_service
             except Exception as exc:
                 logger.error(
@@ -267,6 +327,7 @@ def build_application_from_settings(
     application.bot_data["kite_broker"] = runtime_broker
     application.bot_data["kite_order_execution_adapter"] = order_execution_adapter
     application.bot_data["live_readiness_service"] = live_readiness_service
+    application.bot_data["emergency_close_all"] = operations.emergency_close_all
     return application
 
 
