@@ -190,3 +190,58 @@ def test_database_guard_prevents_cross_instance_fill_overrun(tmp_path):
     snapshot = ledger.snapshot("internal-1")
     assert snapshot["filled_quantity"] == 15
     assert snapshot["remaining_quantity"] == 5
+
+
+
+def test_broker_order_id_cannot_be_reused_by_another_internal_order(tmp_path):
+    ledger = make_ledger(tmp_path)
+    ledger.create_intent(
+        order_id="internal-2", position_id="position-1", leg_index=1,
+        instrument_token=124, tradingsymbol="SENSEX_TEST_PE", side="SELL",
+        quantity=20, order_type="LIMIT", product="NRML", mode="paper",
+        idempotency_key="intent-2",
+    )
+    ledger.transition(
+        order_id="internal-1", new_state=OrderState.VALIDATED, update_id="v1"
+    )
+    ledger.transition(
+        order_id="internal-1", new_state=OrderState.SUBMITTING, update_id="s1"
+    )
+    ledger.transition(
+        order_id="internal-1", new_state=OrderState.ACKNOWLEDGED,
+        update_id="a1", broker_order_id="kite-order-123",
+    )
+    ledger.transition(
+        order_id="internal-2", new_state=OrderState.VALIDATED, update_id="v2"
+    )
+    ledger.transition(
+        order_id="internal-2", new_state=OrderState.SUBMITTING, update_id="s2"
+    )
+    with pytest.raises(ValueError, match="already assigned"):
+        ledger.transition(
+            order_id="internal-2", new_state=OrderState.ACKNOWLEDGED,
+            update_id="a2", broker_order_id="kite-order-123",
+        )
+
+
+def test_broker_order_id_cannot_change_after_correlation(tmp_path):
+    ledger = make_ledger(tmp_path)
+    for state, update_id in (
+        (OrderState.VALIDATED, "v1"),
+        (OrderState.SUBMITTING, "s1"),
+    ):
+        ledger.transition(
+            order_id="internal-1", new_state=state, update_id=update_id
+        )
+    ledger.transition(
+        order_id="internal-1", new_state=OrderState.ACKNOWLEDGED,
+        update_id="a1", broker_order_id="kite-order-123",
+    )
+    ledger.transition(
+        order_id="internal-1", new_state=OrderState.OPEN, update_id="o1"
+    )
+    with pytest.raises(ValueError, match="cannot be changed"):
+        ledger.transition(
+            order_id="internal-1", new_state=OrderState.UNKNOWN,
+            update_id="u1", broker_order_id="kite-order-456",
+        )
