@@ -891,3 +891,54 @@ The branch remains a development/paper foundation. It is not ready for live prod
 - Market data, strategy, risk, execution and broker adapter versions must be included in each candidate and trade audit.
 - Keep the production repository free of backtesting/research tooling as previously requested. Strategy evaluation outputs may be reviewed separately; do not add a backtest engine or push research datasets unless explicitly authorized.
 - This specification is the target contract. Implementation status must be updated honestly as each requirement is delivered; documentation must never imply a feature is implemented merely because it is specified.
+
+## 20. Canonical pending-work register (stable IDs)
+
+This register is the single source of truth for continuation updates. The IDs are
+stable and must not be renumbered or regrouped. A task is COMPLETE only when its
+acceptance conditions are implemented, tested, and verified on the branch. A
+foundation, stub, plan, injectable interface, or paper-only simulation does not
+complete a live requirement. The count below counts IDs, not sub-bullets.
+
+**Register baseline: 17 pending items as of 2026-11-27, branch head
+54aaa739f865e15fcf20e0fb373a955d84d7f5f4.** All are in scope because they map
+directly to requirements in sections 5–16. No additional feature may be added
+unless it is explicitly required by this document.
+
+| ID | Status | Requirement and completion condition |
+|---|---|---|
+| PE-01 | PARTIAL | **Supervised broker fill acquisition and reconciliation.** Add recurring current-session trade-history polling and/or supported Kite postback acquisition, supervised worker lifecycle, reconnect/retry handling, missed-event backfill, periodic reconciliation, health/alerting, and fail-closed behaviour on worker death or stale broker state. Verify idempotency and recovery under interruption. |
+| PE-02 | NOT STARTED | **Kite order-placement adapter.** Implement the required order placement/cancel/modify capabilities only after verifying current BSE/Kite constraints, stable client-reference/tag semantics, exact lookup, rate limits, and broker response validation. Keep live submission disabled by default. |
+| PE-03 | PARTIAL | **Durable live multi-leg execution and recovery.** Connect durable intent/submission/fill records to broker execution; gate every next leg on broker-confirmed fills; handle partial fills, rejects, timeouts, cancel/replace races, unknown outcomes and residual exposure without duplicate submissions. |
+| PE-04 | PARTIAL | **Complete live-readiness wiring.** Construct and inject real broker-authentication, contract-master, fresh market-data, persistence, reconciliation and portfolio-risk dependencies in the runtime. Every required gate must fail closed; startup recovery alone is insufficient. |
+| PE-05 | NOT STARTED | **Managed emergency close-all.** Implement the specified halt, reconcile, cancel-safe-pending-entry, protect/close structure-aware sequencing, per-leg fill verification, retries only after idempotency/status checks, final flat reconciliation, and explicit residual-exposure reporting. |
+| PE-06 | PARTIAL | **Complete equity and portfolio risk accounting.** Finish authoritative net-equity/deposit/withdrawal/P&L/charges/cash/margin accounting, dynamic risk and lot sizing, drawdown enforcement, and reconciliation of risk against actual filled exposure and broker margin. |
+| PE-07 | PARTIAL | **Portfolio Greeks and scenario stress.** Complete aggregate Greeks and multi-leg/multi-expiry stress calculations, including defined-risk verification and their use in candidate, sizing, monitoring and readiness gates. |
+| PE-08 | PARTIAL | **Strategy arbitration and correlation controls.** Complete candidate scoring/selection, portfolio interaction and correlation checks, concurrency limits, rejection diagnostics, and deterministic no-trade decisions. |
+| PE-09 | NOT STARTED | **Iron Condor candidate engine.** Implement the required regime, liquidity, IV/Greek, expiry, payoff, margin, risk and scenario gates; add tests for valid and rejected candidates. |
+| PE-10 | NOT STARTED | **Iron Butterfly candidate engine.** Implement the required regime, liquidity, IV/Greek, expiry, payoff, margin, risk and scenario gates; add tests for valid and rejected candidates. |
+| PE-11 | NOT STARTED | **Calendar/Diagonal candidate engine.** Implement only after multi-expiry contract alignment and scenario modelling are available; validate expiry, term-structure, risk and execution gates. |
+| PE-12 | NOT STARTED | **Defined-debit long-volatility candidate engine.** Implement the specified defined-debit structures with volatility, liquidity, expiry, payoff, margin and scenario gates. |
+| PE-13 | PARTIAL | **Exchange calendar and lifecycle policies.** Complete authoritative exchange-session/holiday handling, expiry cutoffs, intraday/overnight eligibility, event-session restrictions and restart-safe enforcement. |
+| PE-14 | PARTIAL | **Telegram reporting and managed position controls.** Complete authoritative /status, /positions, /orders, /pnl, /capital, /risk and /strategies reporting plus safe confirmed /close, /closeall and /emergency flows. Never return fabricated empty values. |
+| PE-15 | NOT STARTED | **Kite session lifecycle.** Implement the documented secure access-token generation/renewal and expiry/re-authentication workflow without storing secrets in source control or logs. |
+| PE-16 | PARTIAL | **Production operations and security.** Complete structured redacted monitoring, health checks, alert delivery, supervised worker failure alerts, operator runbooks, encrypted backups, restore drills, migration/recovery checks and production security review. |
+| PE-17 | NOT STARTED | **End-to-end paper acceptance.** Exercise all eight strategy families and required rejection paths over representative sessions/regimes/expiry distances/volatility states, including conservative costs, slippage, spread widening and partial fills. Record the required operational and risk metrics; resolve failures and repeat. This is validation, not a profitability guarantee. |
+
+### Register rules
+
+1. Every continuation report must reproduce these same IDs and statuses, or a
+   clearly identified subset with the total unchanged.
+2. Update a status only when code and tests establish the acceptance condition.
+   Record the verifying commit and CI result beside any status transition.
+3. A newly discovered defect is attached to the relevant existing ID. Create a
+   new ID only if the original requirements contain a distinct requirement that
+   is not represented above; explain the exact section mapping before adding it.
+4. Do not count CI reruns, documentation regrouping, or subtask splitting as new
+   pending items.
+5. The remaining count is the number of IDs not marked COMPLETE. PARTIAL and
+   BLOCKED items remain pending.
+6. The register is not authorization to merge, deploy, enable live mode, or place
+   orders. Paper mode remains the default and all existing live-confirmation
+   controls remain mandatory.
+
