@@ -1,5 +1,6 @@
 """Telegram command policy layer; transport handlers can delegate here."""
 from dataclasses import dataclass
+from typing import Any
 
 from .mode import ModeController
 from .telegram_auth import TelegramAllowlist
@@ -10,6 +11,7 @@ class OperationsController:
     allowlist: TelegramAllowlist
     mode: ModeController
     paused: bool = True
+    portfolio_queries: Any | None = None
 
     def handle(
         self,
@@ -62,9 +64,17 @@ class OperationsController:
                 raise RuntimeError("Cannot resume: broker readiness or risk checks failed")
             self.paused = False
             return "Entries resumed after readiness checks."
-        if normalized in {"/positions", "/orders", "/pnl", "/capital", "/risk", "/strategies"}:
+        if normalized in {"/positions", "/orders"}:
+            if self.portfolio_queries is None:
+                raise NotImplementedError(
+                    "Read-only portfolio ledger services are not configured."
+                )
+            if normalized == "/positions":
+                return self.portfolio_queries.positions_text()
+            return self.portfolio_queries.orders_text()
+        if normalized in {"/pnl", "/capital", "/risk", "/strategies"}:
             raise NotImplementedError(
-                "Read-only portfolio query requires the persistence and broker services."
+                "This query requires authoritative account, risk or strategy-runtime services."
             )
         if normalized in {"/close", "/closeall", "/emergency"}:
             raise NotImplementedError(
