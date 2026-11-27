@@ -42,3 +42,18 @@ The caller must supply a fresh underlying index price and timestamp. The builder
 fails closed for stale underlying data and omits individual contracts whose
 quotes or model prices fail validation. It does not fetch an option chain from a
 nonexistent/assumed Kite endpoint, place orders, or authorize live trading.
+
+## Regime intelligence
+
+The initial regime classifier consumes completed, timestamped SENSEX index candles
+and derives EMA(20/50), Wilder-style ATR(14)/ADX(14), and a recent ATR expansion
+ratio. It emits bullish trend, bearish trend, range, volatility expansion, or
+transition. Ambiguous/mixed evidence maps to transition and should suppress new
+entries. Volatility expansion is a separate regime with a directional bias hint,
+not automatic permission to trade in that direction.
+
+The classifier rejects insufficient, unordered, duplicate, stale, future-dated,
+or invalid OHLC data. Its thresholds are conservative initial engineering
+defaults and require forward validation before strategy use. It does not
+constitute a profitability claim, and it must not replace the independent risk
+engine or quote-quality gates.
