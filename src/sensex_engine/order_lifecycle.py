@@ -275,6 +275,7 @@ class OrderLifecycle:
         if created is None:
             return None
         state = dict(created["payload"])
+        state["created_at"] = created["created_at"]
         for event in events:
             payload = event["payload"]
             if event["event_type"] == "ORDER_STATE_CHANGED":
