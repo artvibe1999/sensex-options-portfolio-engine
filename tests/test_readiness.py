@@ -1,0 +1,77 @@
+from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
+
+from sensex_engine.persistence import SqliteStore
+from sensex_engine.position_lifecycle import PositionLifecycle
+from sensex_engine.readiness import LiveReadinessService
+
+
+class FakeBroker:
+    def is_authenticated(self):
+        return True
+
+    def positions(self):
+        return {"net": []}
+
+    def orders(self):
+        return []
+
+
+def make_service(tmp_path, *, contract_age=timedelta(seconds=0), market_age=timedelta(seconds=0), risk=True):
+    now = datetime.now(timezone.utc)
+    contract = SimpleNamespace(instrument_token=1, tradingsymbol="SENSEX80000CE", lot_size=1)
+    lifecycle = PositionLifecycle(SqliteStore(tmp_path / "readiness.sqlite3"))
+    return LiveReadinessService(
+        broker=FakeBroker(),
+        position_lifecycle=lifecycle,
+        contracts_provider=lambda: ([contract], now - contract_age),
+        market_data_timestamp_provider=lambda: now - market_age,
+        risk_clearance_provider=lambda: risk,
+    ), now
+
+
+def test_readiness_passes_only_when_every_gate_is_clear(tmp_path):
+    service, now = make_service(tmp_path)
+    result = service.evaluate(now=now)
+    assert result.ready
+    assert result.telegram_flags() == (True, True)
+
+
+def test_readiness_rejects_stale_contract_master(tmp_path):
+    service, now = make_service(tmp_path, contract_age=timedelta(days=2))
+    result = service.evaluate(now=now)
+    assert not result.broker_ready
+    assert any("contract master is stale" in reason for reason in result.reasons)
+
+
+def test_readiness_rejects_stale_market_data(tmp_path):
+    service, now = make_service(tmp_path, market_age=timedelta(seconds=10))
+    result = service.evaluate(now=now)
+    assert not result.broker_ready
+    assert any("Market data is stale" in reason for reason in result.reasons)
+
+
+def test_readiness_rejects_nonaffirmative_risk_check(tmp_path):
+    service, now = make_service(tmp_path, risk=False)
+    result = service.evaluate(now=now)
+    assert not result.ready
+    assert not result.risk_clear
+    assert result.telegram_flags() == (False, False)
+
+
+def test_readiness_rejects_naive_timestamps(tmp_path):
+    service, now = make_service(tmp_path)
+    service.market_data_timestamp_provider = lambda: datetime.now()
+    result = service.evaluate(now=now)
+    assert not result.broker_ready
+    assert any("Market data is stale" in reason for reason in result.reasons)
+
+
+def test_readiness_rejects_naive_evaluation_time(tmp_path):
+    service, _ = make_service(tmp_path)
+    try:
+        service.evaluate(now=datetime.now())
+    except ValueError as exc:
+        assert "timezone-aware" in str(exc)
+    else:
+        raise AssertionError("naive evaluation time must be rejected")
