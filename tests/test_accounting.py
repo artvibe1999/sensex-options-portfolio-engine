@@ -200,3 +200,55 @@ def test_account_mark_refuses_open_positions_without_defined_max_loss(tmp_path):
             reconciliation_report=ReconciliationReport(True, ((1, 1),), ((1, 1),), (), ()),
             marked_at=now,
         )
+
+
+
+def test_reconcile_and_record_mark_requires_broker_flatness(tmp_path):
+    _, account = make_account(tmp_path)
+    now = datetime.now(UTC)
+    account.set_opening_equity(Decimal("50000"), idempotency_key="opening")
+
+    class Broker:
+        def __init__(self, positions):
+            self._positions = positions
+
+        def is_authenticated(self):
+            return True
+
+        def positions(self):
+            return {"net": self._positions}
+
+        def orders(self):
+            return []
+
+    from sensex_engine.order_lifecycle import OrderLifecycle
+    from sensex_engine.position_lifecycle import PositionLifecycle
+
+    store = account.store
+    positions = PositionLifecycle(store)
+    orders = OrderLifecycle(store)
+    account.reconcile_and_record_mark(
+        broker=Broker([]), contracts=[], position_lifecycle=positions,
+        order_lifecycle=orders, broker_net_equity=Decimal("50000"),
+        unrealized_pnl=Decimal("0"), available_margin=Decimal("30000"),
+        open_max_loss=Decimal("0"), open_positions=0, entries_today=0,
+        reconciliation_id="broker-flat", marked_at=now,
+    )
+    assert account.snapshot(now=now) is not None
+
+    other = PortfolioAccountingService(store=SqliteStore(tmp_path / "mismatch.sqlite3"))
+    other.set_opening_equity(Decimal("50000"), idempotency_key="opening")
+    with pytest.raises(RuntimeError, match="Broker reconciliation failed"):
+        other.reconcile_and_record_mark(
+            broker=Broker([{
+                "exchange": "BFO", "tradingsymbol": "SENSEX_UNKNOWN_CE",
+                "instrument_token": 999, "quantity": 1,
+            }]),
+            contracts=[], position_lifecycle=PositionLifecycle(other.store),
+            order_lifecycle=OrderLifecycle(other.store),
+            broker_net_equity=Decimal("50000"), unrealized_pnl=Decimal("0"),
+            available_margin=Decimal("30000"), open_max_loss=Decimal("0"),
+            open_positions=0, entries_today=0, reconciliation_id="broker-mismatch",
+            marked_at=now,
+        )
+    assert other.snapshot(now=now) is None
