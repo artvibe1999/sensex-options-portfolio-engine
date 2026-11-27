@@ -990,3 +990,11 @@ unless it is explicitly required by this document.
 - Pull-request CI: https://github.com/artvibe1999/sensex-options-portfolio-engine/actions/runs/46007651387 — passed.
 - PE-04 is complete as a runtime readiness integration. Live activation remains blocked by the deliberately unavailable authoritative PE-06 portfolio-risk snapshot provider, and also requires operator-confirmed Kite static-IP registration.
 - PR #1 remains open, draft and unmerged. No deployment or live order was performed.
+
+
+### PE-04 final exact-head verification
+- Final branch head: `bd6ca584c9f7a8bded7e8cad20fdaf90a05b8e43`.
+- Ruff passed; pytest **218 passed**; **83% total statement coverage**.
+- Push CI: https://github.com/artvibe1999/sensex-options-portfolio-engine/actions/runs/46007994344 — passed.
+- Pull-request CI: https://github.com/artvibe1999/sensex-options-portfolio-engine/actions/runs/46008002081 — passed.
+- PR #1 remains open, draft and unmerged. No deployment or live order was performed.
