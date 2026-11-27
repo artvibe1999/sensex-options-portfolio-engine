@@ -90,6 +90,13 @@ class RiskEngine:
                 "Candidate exceeds adaptive per-trade risk budget",
                 per_trade_cap,
             )
+        family_risk = dict(portfolio.strategy_open_risk)
+        family_remaining = equity * self.limits.max_strategy_risk_pct - family_risk.get(
+            candidate.strategy_id, Decimal("0")
+        )
+        if candidate_risk > family_remaining:
+            return RiskDecision(False, "Strategy-family open-risk budget exceeded",
+                                max(family_remaining, Decimal("0")))
         remaining = budget.max_aggregate_risk - portfolio.open_max_loss
         if candidate_risk > remaining:
             return RiskDecision(
