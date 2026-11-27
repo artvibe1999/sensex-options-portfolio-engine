@@ -107,3 +107,43 @@ def test_account_ledger_rejects_naive_timestamps_and_invalid_amounts(tmp_path):
             Decimal("10"), direction="DEPOSIT", idempotency_key="bad-time",
             occurred_at=datetime(2026, 1, 1),
         )
+
+
+
+def test_drawdown_is_flow_adjusted_and_does_not_treat_deposit_as_profit(tmp_path):
+    _, account = make_account(tmp_path)
+    day1 = datetime(2026, 11, 24, 10, 0, tzinfo=UTC)
+    day2 = datetime(2026, 11, 25, 10, 0, tzinfo=UTC)
+    day3 = datetime(2026, 11, 26, 10, 0, tzinfo=UTC)
+    account.set_opening_equity(Decimal("100000"), idempotency_key="opening")
+    account.record_reconciled_mark(
+        broker_net_equity=Decimal("100000"), unrealized_pnl=Decimal("0"),
+        available_margin=Decimal("80000"), open_max_loss=Decimal("0"),
+        open_positions=0, entries_today=0, reconciliation_id="mark-1",
+        broker_positions_hash="sha256:flat-1", marked_at=day1,
+    )
+    account.record_cash_flow(
+        Decimal("50000"), direction="DEPOSIT", idempotency_key="deposit",
+        occurred_at=day2,
+    )
+    account.record_reconciled_mark(
+        broker_net_equity=Decimal("150000"), unrealized_pnl=Decimal("0"),
+        available_margin=Decimal("120000"), open_max_loss=Decimal("0"),
+        open_positions=0, entries_today=0, reconciliation_id="mark-2",
+        broker_positions_hash="sha256:flat-2", marked_at=day2,
+    )
+    account.record_trade_result(
+        realized_pnl=Decimal("-10000"), fees=Decimal("0"),
+        idempotency_key="loss", occurred_at=day3,
+    )
+    account.record_reconciled_mark(
+        broker_net_equity=Decimal("140000"), unrealized_pnl=Decimal("0"),
+        available_margin=Decimal("110000"), open_max_loss=Decimal("0"),
+        open_positions=0, entries_today=1, reconciliation_id="mark-3",
+        broker_positions_hash="sha256:flat-3", marked_at=day3,
+    )
+    snapshot = account.snapshot(now=day3)
+    assert snapshot is not None
+    assert snapshot.net_liquidation_equity == Decimal("140000")
+    assert snapshot.weekly_drawdown_pct == Decimal("0.10")
+    assert snapshot.peak_equity / snapshot.net_liquidation_equity == Decimal("1") / Decimal("0.9")
