@@ -113,7 +113,11 @@ class KiteBrokerMonitor:
         self._stop.set()
         tasks = [task for task in (self._poll_task, self._watchdog_task) if task is not None]
         if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+            _, pending = await asyncio.wait(tasks, timeout=10)
+            for task in pending:
+                task.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
         await self._set_unhealthy("broker monitoring stopped")
 
     async def _poll_loop(self) -> None:
@@ -152,6 +156,7 @@ class KiteBrokerMonitor:
                     backoff = min(self._retry_max, max(2, backoff * 2))
         finally:
             if not self._stop.is_set():
+                self._stop.set()
                 await self._set_unhealthy("broker monitor worker exited unexpectedly")
 
     async def _watchdog_loop(self) -> None:
@@ -168,6 +173,7 @@ class KiteBrokerMonitor:
                     await self._set_unhealthy("broker monitoring data is stale")
         finally:
             if not self._stop.is_set():
+                self._stop.set()
                 await self._set_unhealthy("broker monitor watchdog exited unexpectedly")
 
     async def _set_healthy(self) -> None:
