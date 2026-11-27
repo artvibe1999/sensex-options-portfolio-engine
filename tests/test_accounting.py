@@ -185,3 +185,18 @@ def test_strategy_lot_sizing_fails_closed_without_authoritative_snapshot(tmp_pat
         margin_per_lot=Decimal("2000"),
         max_lots=10,
     ) == 0
+
+
+
+def test_account_mark_refuses_open_positions_without_defined_max_loss(tmp_path):
+    _, account = make_account(tmp_path)
+    now = datetime.now(UTC)
+    account.set_opening_equity(Decimal("50000"), idempotency_key="opening")
+    with pytest.raises(ValueError, match="positive, defined maximum-loss"):
+        account.record_reconciled_mark(
+            broker_net_equity=Decimal("50000"), unrealized_pnl=Decimal("0"),
+            available_margin=Decimal("30000"), open_max_loss=Decimal("0"),
+            open_positions=1, entries_today=1, reconciliation_id="unknown-risk",
+            reconciliation_report=ReconciliationReport(True, ((1, 1),), ((1, 1),), (), ()),
+            marked_at=now,
+        )
