@@ -95,3 +95,21 @@ def test_broker_fill_inbox_fences_stale_worker_claims(tmp_path):
 def test_sqlite_health_check_passes_for_initialized_store(tmp_path):
     store = SqliteStore(tmp_path / "healthy.sqlite3")
     assert store.health_check() is True
+
+
+
+def test_event_idempotency_rejects_same_key_with_changed_payload(tmp_path):
+    store = SqliteStore(tmp_path / "conflicting-events.sqlite3")
+    assert store.append_event(
+        idempotency_key="account:cash-1",
+        event_type="ACCOUNT_CASH_FLOW",
+        aggregate_id="account:default",
+        payload={"amount": "1000", "direction": "DEPOSIT"},
+    )
+    with pytest.raises(ValueError, match="idempotency key conflicts"):
+        store.append_event(
+            idempotency_key="account:cash-1",
+            event_type="ACCOUNT_CASH_FLOW",
+            aggregate_id="account:default",
+            payload={"amount": "2000", "direction": "DEPOSIT"},
+        )
