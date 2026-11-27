@@ -1,9 +1,10 @@
 """Small durable SQLite event/audit store; broker state remains authoritative."""
 import json
 import sqlite3
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 
 class SqliteStore:
@@ -20,8 +21,16 @@ class SqliteStore:
         connection.execute("PRAGMA busy_timeout = 10000")
         return connection
 
+    @contextmanager
+    def _connection(self) -> Iterator[sqlite3.Connection]:
+        connection = self._connect()
+        try:
+            yield connection
+        finally:
+            connection.close()
+
     def _initialize(self) -> None:
-        with self._connect() as connection:
+        with self._connection() as connection:
             connection.execute("PRAGMA journal_mode = WAL")
             connection.executescript(
                 """
@@ -58,7 +67,7 @@ class SqliteStore:
         if not idempotency_key.strip() or not event_type.strip() or not aggregate_id.strip():
             raise ValueError("Event identity fields are required")
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
-        with self._connect() as connection:
+        with self._connection() as connection:
             cursor = connection.execute(
                 """
                 INSERT OR IGNORE INTO portfolio_events
