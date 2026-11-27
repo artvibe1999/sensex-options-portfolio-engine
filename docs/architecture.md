@@ -233,3 +233,39 @@ maximum retry backoff. Settings validation requires a poll interval of at least
 retry maximum. This is read-only monitoring: it does not submit, modify, cancel,
 or automatically retry broker orders. Broker order execution remains a separate
 unfinished requirement.
+
+
+## Kite order execution adapter (PE-02)
+
+The optional `KiteOrderExecutionAdapter` is a separate adapter from the read-only
+market-data client. It only accepts contracts found uniquely in a freshly fetched
+BFO instrument master and restricts execution to SENSEX CE/PE contracts. Orders
+are regular, NRML, DAY LIMIT orders; the action must carry a positive price aligned
+to the current contract tick and a positive quantity divisible by the current lot
+size. MARKET orders and automatic slicing are intentionally unsupported.
+
+A deterministic 20-character alphanumeric Kite tag is derived from the durable
+client-order key. Kite documents `tag` as a maximum-20-character order label
+returned in the day's order book; it is not a server-enforced idempotency key and
+there is no dedicated lookup-by-tag endpoint. Recovery therefore scans the
+transient same-day order book, matches the tag exactly, and verifies BFO exchange,
+current SENSEX contract, token/symbol, side and quantity against the persisted
+intent. Zero matches remain UNKNOWN; multiple matches or mismatched fields require
+manual reconciliation. The adapter never interprets an acknowledgement as a fill.
+
+Modify/cancel first retrieve individual order history and verify the same tag,
+BFO contract identity, current token/symbol, whole-lot quantity and open/partial
+status. The returned broker order ID must match the requested ID. A cancel response
+is only a cancel-request acknowledgement; final cancellation and any racing fills
+must still be acquired through PE-01 fill ingestion and reconciliation.
+
+A conservative per-process throttle spaces order API calls by at least 160 ms.
+This is a local guard, not a global guarantee across multiple processes or other
+clients sharing the same Kite API key. Kite's documented API limits remain the
+ultimate external constraint. Durable intent price is persisted and compared
+before the submission service crosses the broker boundary.
+
+The adapter is deliberately not constructed by the Telegram runtime. The durable
+submission service's explicit live-enable flag remains false by default. Connecting
+the adapter to fill-confirmed multi-leg orchestration and full live readiness is
+PE-03/PE-04, not part of this adapter milestone.
