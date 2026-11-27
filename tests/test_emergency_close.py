@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
+from uuid import uuid4
 
 from sensex_engine.domain import Contract, Right, TradingMode
 from sensex_engine.emergency_close import (
@@ -295,3 +296,56 @@ def test_position_lifecycle_rejects_flat_finalization_with_open_exposure(tmp_pat
         positions.finalize_flat(
             position_id="not-flat-position", update_id="emergency-flat"
         )
+
+
+
+def test_emergency_close_all_closes_reconciled_managed_position(tmp_path):
+    broker = FakeBroker(net=[{
+        "exchange": "BFO", "tradingsymbol": "SENSEX26DEC80000CE",
+        "instrument_token": 1001, "quantity": 20,
+    }])
+    service, _, _, _, positions, _, _, _ = _service(tmp_path, broker=broker)
+    position_id = str(uuid4())
+    positions.create(
+        position_id=position_id,
+        strategy_id="test-strategy",
+        mode="live",
+        legs=[{
+            "leg_index": 0, "instrument_token": 1001,
+            "tradingsymbol": "SENSEX26DEC80000CE", "side": "BUY", "quantity": 20,
+        }],
+        idempotency_key=f"position-create:{position_id}",
+    )
+    positions.record_leg_fill(
+        position_id=position_id, leg_index=0, phase="OPEN",
+        fill_id="broker-open-fill", quantity=20, price=Decimal("100"),
+        filled_at=datetime.now(UTC).isoformat(),
+    )
+
+    class FlattenCoordinator:
+        def execute(self, position, phase):
+            from sensex_engine.execution import ExecutionPhase
+
+            assert phase is ExecutionPhase.CLOSE
+            current = positions.snapshot(str(position.position_id))
+            positions.transition(
+                position_id=str(position.position_id),
+                status="CLOSING",
+                update_id="emergency-close-start",
+            )
+            positions.record_leg_fill(
+                position_id=str(position.position_id), leg_index=0, phase="CLOSE",
+                fill_id="broker-close-fill", quantity=current["legs"][0]["remaining_quantity"],
+                price=Decimal("99"), filled_at=datetime.now(UTC).isoformat(),
+            )
+            broker.net = []
+            return SimpleNamespace(
+                completed=True, reason="all legs closed", residual_exposure=()
+            )
+
+    service._coordinator = FlattenCoordinator()
+    report = service.execute()
+    assert report.completed
+    assert report.closed_positions == (position_id,)
+    assert positions.snapshot(position_id)["is_fully_closed"]
+    assert broker.net == []
