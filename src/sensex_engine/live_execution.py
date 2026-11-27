@@ -284,6 +284,18 @@ class LiveMultiLegExecutionCoordinator:
         snapshot = self._positions.snapshot(position_id)
         if snapshot is None:
             return []
+        unresolved = [
+            order for order in self._orders.all_snapshots()
+            if order.get("position_id") == position_id
+            and order["state"] not in {
+                OrderState.FILLED.value, OrderState.CANCELLED.value,
+                OrderState.REJECTED.value, OrderState.EXPIRED.value,
+            }
+            and not order.get("cancel_confirmed", False)
+        ]
+        if unresolved:
+            self._mark_position_error(position_id, "An opening order remains unresolved")
+            return []
         if not any(int(leg["remaining_quantity"]) > 0 for leg in snapshot["legs"]):
             if snapshot["status"] == "PENDING":
                 self._positions.transition(
@@ -335,9 +347,12 @@ class LiveMultiLegExecutionCoordinator:
                 if outcome.confirmed_filled:
                     break
                 order = self._orders.snapshot(order_id)
-                if order is None or order["state"] not in {
-                    OrderState.CANCELLED.value, OrderState.REJECTED.value,
-                }:
+                if order is None or (
+                    order["state"] not in {
+                        OrderState.CANCELLED.value, OrderState.REJECTED.value,
+                    }
+                    and not order.get("cancel_confirmed", False)
+                ):
                     self._mark_position_error(position_id, "Close order remains unresolved")
                     return outcomes
             current = self._positions.snapshot(position_id)
@@ -363,7 +378,10 @@ class LiveMultiLegExecutionCoordinator:
             OrderState.FILLED.value, OrderState.CANCELLED.value,
             OrderState.REJECTED.value, OrderState.EXPIRED.value,
         }
-        active = [item for item in matches if item["state"] not in terminal]
+        active = [
+            item for item in matches
+            if item["state"] not in terminal and not item.get("cancel_confirmed", False)
+        ]
         if len(active) > 1:
             raise RuntimeError("Multiple unresolved close orders exist for one position leg")
         if active:
