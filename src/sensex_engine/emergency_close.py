@@ -161,7 +161,8 @@ class EmergencyCloseAllService:
                 run_id, False, True, (), (), (), (),
                 (
                     "Durable portfolio storage health check failed",
-                    "Broker exposure remains unverified because durable reconciliation is unavailable",
+                    "Broker exposure remains unverified because "
+                    "durable reconciliation is unavailable",
                 ),
             )
         if not self._broker.is_authenticated():
