@@ -92,6 +92,7 @@ class PortfolioSnapshot:
     entries_today: int = 0
     deposits_withdrawals_today: Decimal = Decimal("0")
     peak_equity: Decimal | None = None
+    start_of_day_equity: Decimal | None = None
 
 
 @dataclass(frozen=True)
