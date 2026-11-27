@@ -93,6 +93,7 @@ class PortfolioSnapshot:
     deposits_withdrawals_today: Decimal = Decimal("0")
     peak_equity: Decimal | None = None
     start_of_day_equity: Decimal | None = None
+    strategy_open_risk: tuple[tuple[str, Decimal], ...] = ()
 
 
 @dataclass(frozen=True)
