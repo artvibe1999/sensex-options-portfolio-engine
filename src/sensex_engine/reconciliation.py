@@ -198,10 +198,14 @@ class BrokerReconciliationService:
             snapshots = position_lifecycle.active_snapshots()
             internal: list[Any] = []
             for snapshot in snapshots:
+                if snapshot.get("mode") == "paper":
+                    continue
                 status = str(snapshot["status"]).upper()
                 legs = []
                 for leg in snapshot["legs"]:
                     remaining = int(leg["remaining_quantity"])
+                    if remaining == 0:
+                        continue
                     contract = SimpleNamespace(
                         instrument_token=int(leg["instrument_token"]),
                         tradingsymbol=str(leg["tradingsymbol"]),
