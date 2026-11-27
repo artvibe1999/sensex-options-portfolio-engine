@@ -304,6 +304,19 @@ class OrderLifecycle:
                 snapshots.append(snapshot)
         return sorted(snapshots, key=lambda item: str(item["order_id"]))
 
+    def all_snapshots(self) -> list[dict[str, Any]]:
+        """Return every durable order projection, including terminal orders.
+
+        Terminal orders remain discoverable because broker fills can arrive late
+        after a cancel acknowledgement.
+        """
+        snapshots = [
+            snapshot
+            for order_id in self.store.aggregate_ids_for_event("ORDER_INTENT_CREATED")
+            if (snapshot := self.snapshot(order_id)) is not None
+        ]
+        return sorted(snapshots, key=lambda item: str(item["order_id"]))
+
     @staticmethod
     def _average_fill_price(events: list[dict[str, Any]]) -> str | None:
         fills = [event["payload"] for event in events
