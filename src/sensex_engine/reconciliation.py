@@ -2,8 +2,8 @@
 from dataclasses import dataclass
 from typing import Any
 
-from .broker import BrokerPort
 from .domain import Contract, Position, Side
+from .broker import BrokerPort
 
 
 ACTIVE_ORDER_STATUSES = frozenset({
