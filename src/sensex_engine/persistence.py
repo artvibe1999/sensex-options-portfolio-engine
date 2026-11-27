@@ -96,7 +96,7 @@ class SqliteStore:
     ) -> bool:
         if not command_id.strip() or not command.strip():
             raise ValueError("Command identity and text are required")
-        with self._connect() as connection:
+        with self._connection() as connection:
             cursor = connection.execute(
                 """
                 INSERT OR IGNORE INTO command_audit
@@ -116,7 +116,7 @@ class SqliteStore:
             return cursor.rowcount == 1
 
     def events_for(self, aggregate_id: str) -> list[dict[str, Any]]:
-        with self._connect() as connection:
+        with self._connection() as connection:
             rows = connection.execute(
                 """
                 SELECT event_id, idempotency_key, event_type, aggregate_id,
