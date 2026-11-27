@@ -14,10 +14,16 @@ from .risk import RiskEngine
 class EntrySizingService:
     """Use current executable prices and broker basket margin, not fixed capital."""
 
-    def __init__(self, *, broker: Any, snapshot_provider: Any, risk: RiskEngine) -> None:
+    def __init__(
+        self, *, broker: Any, snapshot_provider: Any, risk: RiskEngine,
+        quantity_freeze_units: int = 1000,
+    ) -> None:
+        if type(quantity_freeze_units) is not int or quantity_freeze_units <= 0:
+            raise ValueError("Verified exchange freeze quantity must be positive")
         self.broker = broker
         self.snapshot_provider = snapshot_provider
         self.risk = risk
+        self.quantity_freeze_units = quantity_freeze_units
 
     def approve(
         self, candidate: StrategyCandidate, *, max_lots: int,
@@ -26,7 +32,8 @@ class EntrySizingService:
         now = now or datetime.now(UTC)
         if not timedelta(0) <= now - candidate.data_timestamp <= timedelta(seconds=2):
             raise ValueError("Strategy signal is stale or future-dated")
-        if max_lots < 1 or not Decimal("0") < allocation_pct <= Decimal("1"):
+        if (type(max_lots) is not int or max_lots < 1
+                or not Decimal("0") < allocation_pct <= Decimal("1")):
             raise ValueError("Invalid lot or allocation limit")
         if any(leg.lots != 1 for leg in candidate.legs):
             raise ValueError("Sizing input must be a one-lot candidate")
@@ -49,7 +56,10 @@ class EntrySizingService:
             prices[token] = quote.ask if leg.side is Side.BUY else quote.bid
             quote_times.append(quote.timestamp)
             depth = quote.ask_quantity if leg.side is Side.BUY else quote.bid_quantity
-            liquidity_lots = min(liquidity_lots, depth // leg.contract.lot_size)
+            liquidity_lots = min(
+                liquidity_lots, depth // leg.contract.lot_size,
+                self.quantity_freeze_units // leg.contract.lot_size,
+            )
         if max(quote_times) - min(quote_times) > timedelta(seconds=2):
             raise ValueError("Candidate quotes are not aligned")
         one = calculate_expiry_payoff(candidate.legs, prices)
