@@ -137,6 +137,29 @@ class PositionLifecycle:
             payload={"position_id": position_id, "status": target},
         )
 
+    def finalize_flat(self, *, position_id: str, update_id: str) -> bool:
+        """Mark a position CLOSED only after its durable per-leg exposure is zero."""
+        current = self.snapshot(position_id)
+        if current is None:
+            raise ValueError("Unknown position")
+        if any(int(leg["remaining_quantity"]) != 0 for leg in current["legs"]):
+            raise ValueError("Cannot finalize a position with residual exposure")
+        if current["status"] == "CLOSED" and current["is_fully_closed"]:
+            return False
+        if current["status"] not in {"PENDING", "ERROR", "CLOSING"}:
+            raise ValueError("Position state does not permit flat finalization")
+        if current["status"] != "CLOSING":
+            self.transition(
+                position_id=position_id,
+                status="CLOSING",
+                update_id=f"{update_id}:closing",
+            )
+        return self.transition(
+            position_id=position_id,
+            status="CLOSED",
+            update_id=f"{update_id}:closed",
+        )
+
     def snapshot(self, position_id: str) -> dict[str, Any] | None:
         events = self.store.events_for(position_id)
         if not events or events[0]["event_type"] != "POSITION_CREATED":
