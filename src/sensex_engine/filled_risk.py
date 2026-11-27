@@ -44,12 +44,12 @@ def filled_position_risk(
         if sum(q for c, _, q in legs if c.right == Right.CE) < 0:
             raise ValueError("Unbounded short call exposure")
         spots = {Decimal("0"), *(c.strike for c, _, _ in legs)}
-        def pnl(spot: Decimal) -> Decimal:
+        def pnl(spot: Decimal, exposure: list = legs) -> Decimal:
             return sum(
                 (
                     (max(spot - c.strike if c.right == Right.CE else c.strike - spot,
                          Decimal("0")) - premium) * q
-                    for c, premium, q in legs
+                    for c, premium, q in exposure
                 ),
                 Decimal("0"),
             )
