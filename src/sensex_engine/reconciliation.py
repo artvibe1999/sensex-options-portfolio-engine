@@ -50,8 +50,19 @@ def _expected_quantities(
             issues.append(f"Internal position {position.position_id} is in ERROR state")
         for leg in position.legs:
             quantity = leg.contract.lot_size * leg.lots
-            signed = quantity if getattr(leg.side, "value", leg.side) == "BUY" else -quantity
+            side = getattr(leg.side, "value", leg.side)
+            if quantity <= 0 or side not in {"BUY", "SELL"}:
+                issues.append(
+                    f"Internal position {position.position_id} has an invalid leg"
+                )
+                continue
+            signed = quantity if side == "BUY" else -quantity
             token = leg.contract.instrument_token
+            if token <= 0:
+                issues.append(
+                    f"Internal position {position.position_id} has an invalid instrument token"
+                )
+                continue
             expected[token] = expected.get(token, 0) + signed
     return (
         {token: quantity for token, quantity in expected.items() if quantity},
@@ -62,7 +73,7 @@ def _expected_quantities(
 def reconcile_snapshots(
     *,
     contracts: list[ContractLike],
-    internal_positions: list[Position],
+    internal_positions: list[PositionLike],
     broker_positions: dict[str, Any],
     broker_orders: list[dict[str, Any]],
 ) -> ReconciliationReport:
@@ -73,9 +84,11 @@ def reconcile_snapshots(
     """
     expected, issues = _expected_quantities(internal_positions)
     token_by_symbol: dict[str, int] = {}
+    seen_tokens: set[int] = set()
     for contract in contracts:
-        if contract.instrument_token in {value for value in token_by_symbol.values()}:
+        if contract.instrument_token in seen_tokens:
             issues.append("Duplicate instrument token in current contract master")
+        seen_tokens.add(contract.instrument_token)
         if contract.tradingsymbol in token_by_symbol:
             issues.append("Duplicate tradingsymbol in current contract master")
         token_by_symbol[contract.tradingsymbol] = contract.instrument_token
@@ -145,6 +158,8 @@ def reconcile_snapshots(
             issues.append("Malformed broker order row")
             continue
         status = str(order.get("status", "")).strip().upper()
+        if not status:
+            issues.append("Broker order row is missing status")
         if status in ACTIVE_ORDER_STATUSES:
             pending.append(str(order.get("order_id") or "UNKNOWN"))
     if pending:
@@ -166,7 +181,7 @@ class BrokerReconciliationService:
         self,
         broker: Any,
         *,
-        contracts: list[Contract],
+        contracts: list[ContractLike],
         internal_positions: list[PositionLike],
     ) -> ReconciliationReport:
         try:
