@@ -154,6 +154,21 @@ class SqliteStore:
             if event_type == "ORDER_INTENT_CREATED":
                 if rows:
                     raise ValueError("Order intent already exists")
+                incoming_client_key = payload.get("client_order_key")
+                if incoming_client_key:
+                    existing_intents = connection.execute(
+                        "SELECT aggregate_id, payload_json FROM portfolio_events "
+                        "WHERE event_type = 'ORDER_INTENT_CREATED'"
+                    ).fetchall()
+                    for existing in existing_intents:
+                        existing_payload = json.loads(existing["payload_json"])
+                        if (
+                            existing_payload.get("client_order_key") == incoming_client_key
+                            and existing["aggregate_id"] != aggregate_id
+                        ):
+                            raise ValueError(
+                                "Client order key is already assigned to another intent"
+                            )
             else:
                 if not rows or rows[0]["event_type"] != "ORDER_INTENT_CREATED":
                     raise ValueError("Unknown order intent")
