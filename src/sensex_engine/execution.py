@@ -61,25 +61,27 @@ def build_leg_execution_plan(
         ordered = sorted(indexed_legs, key=lambda item: (
             0 if item[1].side.value == "BUY" else 1, item[0]
         ))
-        action = lambda side: side.value
     elif phase is ExecutionPhase.CLOSE:
         ordered = sorted(indexed_legs, key=lambda item: (
             0 if item[1].side.value == "SELL" else 1, item[0]
         ))
-        action = lambda side: "SELL" if side.value == "BUY" else "BUY"
     else:
         raise ValueError("Unsupported execution phase")
 
-    return tuple(
-        LegExecutionAction(
+    actions = []
+    for index, leg in ordered:
+        if phase is ExecutionPhase.OPEN:
+            action_side = leg.side.value
+        else:
+            action_side = "SELL" if leg.side.value == "BUY" else "BUY"
+        actions.append(LegExecutionAction(
             leg_index=index,
             instrument_token=leg.contract.instrument_token,
             tradingsymbol=leg.contract.tradingsymbol,
-            side=action(leg.side),
+            side=action_side,
             quantity=leg.lots * leg.contract.lot_size,
-        )
-        for index, leg in ordered
-    )
+        ))
+    return tuple(actions)
 
 
 @dataclass(frozen=True)
