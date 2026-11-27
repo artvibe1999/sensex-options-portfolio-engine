@@ -2,7 +2,6 @@
 from decimal import Decimal
 
 from .domain import OptionLeg, Regime, Side, StrategyCandidate
-from .market_data import Quote
 from .option_chain import OptionChainSnapshot, OptionAnalytics
 from .payoff import calculate_expiry_payoff
 
