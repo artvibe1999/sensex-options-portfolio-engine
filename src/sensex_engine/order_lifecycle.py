@@ -37,8 +37,8 @@ _ALLOWED: dict[OrderState, set[OrderState]] = {
     OrderState.VALIDATED: {OrderState.SUBMITTING, OrderState.REJECTED},
     OrderState.SUBMITTING: {
         OrderState.ACKNOWLEDGED, OrderState.OPEN, OrderState.PARTIALLY_FILLED,
-        OrderState.FILLED, OrderState.REJECTED, OrderState.UNKNOWN,
-        OrderState.RECOVERY_REQUIRED,
+        OrderState.FILLED, OrderState.CANCELLED, OrderState.REJECTED,
+        OrderState.UNKNOWN, OrderState.RECOVERY_REQUIRED,
     },
     OrderState.ACKNOWLEDGED: {
         OrderState.OPEN, OrderState.PARTIALLY_FILLED, OrderState.FILLED,
