@@ -285,10 +285,13 @@ class OrderLifecycle:
             return None
         state = dict(created["payload"])
         state["created_at"] = created["created_at"]
+        state["cancel_confirmed"] = False
         for event in events:
             payload = event["payload"]
             if event["event_type"] == "ORDER_STATE_CHANGED":
                 state["state"] = payload["state"]
+                if payload["state"] == OrderState.CANCELLED.value:
+                    state["cancel_confirmed"] = True
                 if "broker_order_id" in payload:
                     state["broker_order_id"] = payload["broker_order_id"]
                 state["last_message"] = payload.get("message", "")
@@ -310,7 +313,11 @@ class OrderLifecycle:
         snapshots = []
         for order_id in self.store.aggregate_ids_for_event("ORDER_INTENT_CREATED"):
             snapshot = self.snapshot(order_id)
-            if snapshot is not None and snapshot["state"] not in terminal:
+            if (
+                snapshot is not None
+                and snapshot["state"] not in terminal
+                and not snapshot.get("cancel_confirmed", False)
+            ):
                 snapshots.append(snapshot)
         return sorted(snapshots, key=lambda item: str(item["order_id"]))
 
