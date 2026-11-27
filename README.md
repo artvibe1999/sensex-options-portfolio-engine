@@ -28,3 +28,7 @@ Backtesting/research tooling is intentionally excluded from the production repos
 ## Development
 
 The implementation is developed on a dedicated feature branch and reviewed through a draft pull request. The project is not live-deployable while execution, reconciliation, recovery, and live-readiness gaps remain. The Telegram environment entrypoint now attempts read-only Kite startup recovery before polling when both `KITE_API_KEY` and `KITE_ACCESS_TOKEN` are supplied; missing credentials or any recovery failure keeps resume and live confirmation blocked. This startup check does not enable live orders or replace recurring fill supervision and full live-readiness checks. See the requirements document's implementation-status section for the current gap list.
+
+## Running the strategy engine
+
+`python -m sensex_engine` (paper by default). Operation, strategies, capital tiers, live activation and VM deployment: `docs/engine.md`.

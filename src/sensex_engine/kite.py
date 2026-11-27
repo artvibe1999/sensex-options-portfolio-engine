@@ -17,6 +17,8 @@ class KiteReadOnlyAdapter:
     def __init__(self, client: Any) -> None:
         self._client = client
         self._symbols_by_token: dict[int, str] = {}
+        # Near-dated SENSEX futures (token, tradingsymbol, expiry) from the same master download.
+        self.futures: list[tuple[int, str, datetime]] = []
 
     @classmethod
     def from_credentials(cls, api_key: str, access_token: str) -> "KiteReadOnlyAdapter":
@@ -44,10 +46,19 @@ class KiteReadOnlyAdapter:
         self._symbols_by_token.clear()
         rows = self._client.instruments("BFO")
         contracts: list[Contract] = []
+        futures: list[tuple[int, str, datetime]] = []
         for row in rows:
             if row.get("name") != "SENSEX":
                 continue
             instrument_type = row.get("instrument_type")
+            if instrument_type == "FUT":
+                expiry_value = row.get("expiry")
+                if isinstance(expiry_value, date):
+                    when = (expiry_value if isinstance(expiry_value, datetime)
+                            else datetime.combine(expiry_value, time.min))
+                    futures.append((int(row["instrument_token"]), str(row["tradingsymbol"]),
+                                    when.replace(tzinfo=IST) if when.tzinfo is None else when))
+                continue
             if instrument_type not in {"CE", "PE"}:
                 continue
             expiry_value = row.get("expiry")
@@ -73,6 +84,7 @@ class KiteReadOnlyAdapter:
             )
             contracts.append(contract)
             self._symbols_by_token[token] = f"BFO:{contract.tradingsymbol}"
+        self.futures = sorted(futures, key=lambda item: item[2])
         return contracts
 
     def quotes(self, instrument_tokens: list[int]) -> dict[int, Quote]:
@@ -86,35 +98,9 @@ class KiteReadOnlyAdapter:
         )
         result: dict[int, Quote] = {}
         for token in instrument_tokens:
-            raw = raw_quotes.get(self._symbols_by_token[token])
-            if not raw:
-                continue
-            depth = raw.get("depth") or {}
-            buy = (depth.get("buy") or [{}])[0]
-            sell = (depth.get("sell") or [{}])[0]
-            timestamp = raw.get("timestamp") or raw.get("last_trade_time")
-            if timestamp is None:
-                continue
-            if isinstance(timestamp, str):
-                try:
-                    timestamp = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-                except ValueError:
-                    continue
-            if not isinstance(timestamp, datetime):
-                continue
-            if timestamp.tzinfo is None:
-                timestamp = timestamp.replace(tzinfo=IST)
-            timestamp = timestamp.astimezone(UTC)
-            result[token] = Quote(
-                instrument_token=token,
-                timestamp=timestamp,
-                last_price=Decimal(str(raw.get("last_price", 0))),
-                bid=Decimal(str(buy.get("price", 0))),
-                ask=Decimal(str(sell.get("price", 0))),
-                bid_quantity=int(buy.get("quantity", 0)),
-                ask_quantity=int(sell.get("quantity", 0)),
-                volume=int(raw.get("volume", 0)),
-            )
+            quote = parse_quote(token, raw_quotes.get(self._symbols_by_token[token]))
+            if quote is not None:
+                result[token] = quote
         return result
 
     def margins(self, segment: str = "equity") -> dict[str, Any]:
@@ -170,3 +156,38 @@ class KiteReadOnlyAdapter:
         if not isinstance(rows, list):
             raise ValueError("Kite order_trades response must be a list")
         return rows
+
+
+def parse_quote(token: int, raw: dict[str, Any] | None) -> Quote | None:
+    """Normalise one Kite quote row (top-of-book, volume, OI); None when unusable."""
+    if not raw:
+        return None
+    depth = raw.get("depth") or {}
+    buy = (depth.get("buy") or [{}])[0]
+    sell = (depth.get("sell") or [{}])[0]
+    timestamp = raw.get("timestamp") or raw.get("last_trade_time")
+    if timestamp is None:
+        return None
+    if isinstance(timestamp, str):
+        try:
+            timestamp = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    if not isinstance(timestamp, datetime):
+        return None
+    if timestamp.tzinfo is None:
+        timestamp = timestamp.replace(tzinfo=IST)
+    try:
+        return Quote(
+            instrument_token=token,
+            timestamp=timestamp.astimezone(UTC),
+            last_price=Decimal(str(raw.get("last_price", 0))),
+            bid=Decimal(str(buy.get("price", 0))),
+            ask=Decimal(str(sell.get("price", 0))),
+            bid_quantity=int(buy.get("quantity", 0)),
+            ask_quantity=int(sell.get("quantity", 0)),
+            volume=int(raw.get("volume", 0) or 0),
+            oi=int(raw.get("oi", 0) or 0),
+        )
+    except (ValueError, ArithmeticError):
+        return None

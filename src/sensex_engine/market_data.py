@@ -14,6 +14,7 @@ class Quote:
     bid_quantity: int
     ask_quantity: int
     volume: int
+    oi: int = 0
 
     def __post_init__(self) -> None:
         if self.instrument_token <= 0:

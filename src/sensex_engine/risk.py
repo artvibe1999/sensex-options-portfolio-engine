@@ -5,6 +5,9 @@ from decimal import Decimal
 from .capital import adaptive_risk_budget
 from .domain import PortfolioSnapshot, RiskDecision, StrategyCandidate
 
+# Only defined-debit long-volatility structures may open in an expansion regime.
+VOLATILITY_EXPANSION_STRATEGIES = frozenset({"SENSEX_LONG_IRON_BUTTERFLY"})
+
 
 @dataclass(frozen=True)
 class RiskLimits:
@@ -17,6 +20,7 @@ class RiskLimits:
     max_concurrent_positions: int = 2
     max_new_entries_per_day: int = 3
     max_margin_utilization_pct: Decimal = Decimal("0.70")
+    drawdown_band_scale: Decimal = Decimal("1")
 
 
 class RiskEngine:
@@ -47,7 +51,8 @@ class RiskEngine:
             return reject("Broker positions/orders are not reconciled")
         if candidate.regime.value in {"transition", "unknown"}:
             return reject("Market regime is uncertain")
-        if candidate.regime.value == "volatility_expansion":
+        if (candidate.regime.value == "volatility_expansion"
+                and candidate.strategy_id not in VOLATILITY_EXPANSION_STRATEGIES):
             return reject("Volatility expansion requires a separately validated strategy")
         if not candidate.is_defined_risk:
             return reject("Unbounded-risk strategy is prohibited")
@@ -79,6 +84,7 @@ class RiskEngine:
                 self.limits.max_strategy_risk_pct,
             ),
             base_aggregate_pct=self.limits.max_aggregate_open_risk_pct,
+            band_scale=self.limits.drawdown_band_scale,
         )
         if not budget.new_entries_allowed:
             return reject(budget.reason)

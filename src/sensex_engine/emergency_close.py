@@ -14,6 +14,7 @@ from .execution import ExecutionPhase
 from .live_execution import LiveMultiLegExecutionCoordinator
 from .order_lifecycle import OrderLifecycle, OrderState
 from .position_lifecycle import PositionLifecycle
+from .reconciliation import engine_traded_tokens, managed_scope, order_in_scope
 
 IST = ZoneInfo("Asia/Kolkata")
 _TERMINAL = {
@@ -394,9 +395,21 @@ class EmergencyCloseAllService:
             broker_positions.get("net"), list
         ):
             return (), ("Kite returned a malformed net-position snapshot",)
+        expected: dict[int, int] = {}
+        for snapshot in self._positions.active_snapshots():
+            if str(snapshot.get("mode", "")).lower() != "live":
+                continue
+            for leg in snapshot["legs"]:
+                token = int(leg["instrument_token"])
+                quantity = int(leg["remaining_quantity"])
+                signed = quantity if str(leg["side"]).upper() == "BUY" else -quantity
+                expected[token] = expected.get(token, 0) + signed
         actual: dict[int, int] = {}
         symbol_by_token = {item.instrument_token: item.tradingsymbol for item in contracts}
         token_by_symbol = {item.tradingsymbol: item.instrument_token for item in contracts}
+        engine_tokens: set[int] = set()
+        if managed_scope():
+            engine_tokens = engine_traded_tokens(self._broker.orders(), token_by_symbol)
         for row in broker_positions["net"]:
             if not isinstance(row, dict):
                 issues.append("Kite returned a malformed position row")
@@ -413,10 +426,12 @@ class EmergencyCloseAllService:
                 issues.append(f"Invalid broker quantity for {symbol or 'unknown contract'}")
                 continue
             if token is None:
-                if quantity and symbol.startswith("SENSEX"):
+                if quantity and symbol.startswith("SENSEX") and not managed_scope():
                     issues.append(
                         f"Unmapped non-zero SENSEX broker position: {symbol or token_value}"
                     )
+                continue
+            if managed_scope() and token not in expected and token not in engine_tokens:
                 continue
             if token not in symbol_by_token:
                 if quantity and symbol.startswith("SENSEX"):
@@ -426,15 +441,6 @@ class EmergencyCloseAllService:
                 continue
             actual[token] = actual.get(token, 0) + quantity
 
-        expected: dict[int, int] = {}
-        for snapshot in self._positions.active_snapshots():
-            if str(snapshot.get("mode", "")).lower() != "live":
-                continue
-            for leg in snapshot["legs"]:
-                token = int(leg["instrument_token"])
-                quantity = int(leg["remaining_quantity"])
-                signed = quantity if str(leg["side"]).upper() == "BUY" else -quantity
-                expected[token] = expected.get(token, 0) + signed
         residuals = tuple(
             (symbol_by_token.get(token, str(token)), actual.get(token, 0))
             for token in sorted(set(actual) | set(expected))
@@ -461,6 +467,8 @@ class EmergencyCloseAllService:
                     if exchange != "BFO" or (
                         symbol not in token_by_symbol and not symbol.startswith("SENSEX")
                     ):
+                        continue
+                    if not order_in_scope(row, set(expected), token_by_symbol):
                         continue
                     if symbol not in token_by_symbol:
                         issues.append(

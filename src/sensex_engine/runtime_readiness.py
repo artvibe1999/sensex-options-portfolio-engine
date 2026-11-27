@@ -30,10 +30,13 @@ class KitePortfolioRiskReadiness:
         broker: Any,
         snapshot_provider: Callable[[], PortfolioSnapshot | None] | None,
         settings: Any,
+        limits_provider: Callable[[], Any] | None = None,
     ) -> None:
         self._broker = broker
         self._snapshot_provider = snapshot_provider
         self._settings = settings
+        # Optional capital-tier RiskLimits (engine policy); falls back to settings.
+        self._limits_provider = limits_provider
         self.last_reason = "Portfolio risk snapshot is unavailable"
 
     @staticmethod
@@ -104,23 +107,27 @@ class KitePortfolioRiskReadiness:
                 raise ValueError("Portfolio equity or available margin is not positive")
             if portfolio.available_margin > net:
                 raise ValueError("Portfolio available margin exceeds broker-reported funds")
+            limits = self._limits_provider() if self._limits_provider is not None else None
+            if self._limits_provider is not None and limits is None:
+                raise ValueError("Capital-tier risk limits are unavailable")
+            source = limits if limits is not None else self._settings
             if portfolio.open_positions >= int(getattr(
-                self._settings, "max_concurrent_positions", 2
+                source, "max_concurrent_positions", 2
             )):
                 raise ValueError("Portfolio exceeds maximum concurrent positions")
             if portfolio.entries_today >= int(getattr(
-                self._settings, "max_new_entries_per_day", 3
+                source, "max_new_entries_per_day", 3
             )):
                 raise ValueError("Maximum daily entry count has been reached")
 
             daily_stop = Decimal(str(getattr(
-                self._settings, "daily_loss_stop_pct", 0.02
+                source, "daily_loss_stop_pct", 0.02
             )))
             weekly_stop = Decimal(str(getattr(
-                self._settings, "weekly_drawdown_stop_pct", 0.04
+                source, "weekly_drawdown_stop_pct", 0.04
             )))
             monthly_stop = Decimal(str(getattr(
-                self._settings, "monthly_drawdown_stop_pct", 0.07
+                source, "monthly_drawdown_stop_pct", 0.07
             )))
             daily_pnl = portfolio.daily_realized_pnl + portfolio.daily_unrealized_pnl
             if daily_pnl <= -(portfolio.start_of_day_equity or equity) * daily_stop:
@@ -134,11 +141,12 @@ class KitePortfolioRiskReadiness:
                 equity,
                 peak_equity=portfolio.peak_equity,
                 base_risk_pct=Decimal(str(getattr(
-                    self._settings, "risk_per_trade_pct", 0.0075
+                    source, "risk_per_trade_pct", 0.0075
                 ))),
                 base_aggregate_pct=Decimal(str(getattr(
-                    self._settings, "max_aggregate_open_risk_pct", 0.02
+                    source, "max_aggregate_open_risk_pct", 0.02
                 ))),
+                band_scale=Decimal(str(getattr(source, "drawdown_band_scale", 1))),
             )
             if not budget.new_entries_allowed:
                 raise ValueError(budget.reason)
@@ -159,6 +167,8 @@ def build_kite_live_readiness_service(
     order_lifecycle: Any,
     settings: Any,
     portfolio_snapshot_provider: Callable[[], PortfolioSnapshot | None] | None = None,
+    limits_provider: Callable[[], Any] | None = None,
+    spot_provider: Callable[[], Decimal] | None = None,
 ) -> LiveReadinessService:
     """Compose actual Kite contract, quote, persistence, reconciliation and risk gates."""
 
@@ -198,7 +208,12 @@ def build_kite_live_readiness_service(
         strikes = sorted({item.strike for item in expiry_contracts})
         if not strikes:
             raise RuntimeError("Nearest SENSEX expiry has no valid strikes")
-        central_strike = strikes[len(strikes) // 2]
+        # Check the liquid at-the-money pair; deep ITM/OTM strikes are wide by nature.
+        spot = spot_provider() if spot_provider is not None else None
+        central_strike = (
+            min(strikes, key=lambda strike: abs(strike - spot))
+            if spot is not None and spot > 0 else strikes[len(strikes) // 2]
+        )
         pair = [
             item for item in expiry_contracts
             if item.strike == central_strike and item.right in {Right.CE, Right.PE}
@@ -236,6 +251,7 @@ def build_kite_live_readiness_service(
         broker=broker,
         snapshot_provider=portfolio_snapshot_provider,
         settings=settings,
+        limits_provider=limits_provider,
     )
     static_ip_confirmed = getattr(settings, "kite_static_ip_confirmed", False) is True
 

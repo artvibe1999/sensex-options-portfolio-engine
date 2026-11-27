@@ -30,6 +30,64 @@ ACTIVE_ORDER_STATUSES = frozenset({
 })
 
 
+# Orders placed by this engine carry Kite tags with this prefix (see kite_execution).
+ENGINE_TAG_PREFIX = "PF"
+_SCOPE = {"managed": False}
+
+
+def configure_scope(*, managed: bool) -> None:
+    """Select reconciliation scope for this process.
+
+    ``managed=False`` (default, strict): any non-zero SENSEX/BFO broker position or
+    active order that the engine did not create fails reconciliation.
+    ``managed=True`` (shared account): broker exposure and orders on instruments the
+    engine does not hold and did not tag are ignored, so another bot or manual
+    trading on the same Zerodha account cannot halt this engine. Any broker
+    quantity or active order on an instrument the engine *does* hold is still
+    compared exactly, so overlapping exposure fails closed.
+    """
+    _SCOPE["managed"] = bool(managed)
+
+
+def managed_scope() -> bool:
+    return _SCOPE["managed"]
+
+
+def engine_traded_tokens(broker_orders: Any, token_by_symbol: dict[str, int]) -> set[int]:
+    """Tokens of today's PF-tagged orders (any status): the engine's own exposure even
+    when a crash lost the durable fill record, so such orphans are never ignored."""
+    tokens: set[int] = set()
+    for row in broker_orders if isinstance(broker_orders, list) else []:
+        if not isinstance(row, dict) or not str(row.get("tag") or "").startswith(ENGINE_TAG_PREFIX):
+            continue
+        token = row.get("instrument_token")
+        try:
+            token = int(token) if token is not None else None
+        except (TypeError, ValueError):
+            token = None
+        if token is None:
+            token = token_by_symbol.get(str(row.get("tradingsymbol", "")))
+        if token is not None:
+            tokens.add(token)
+    return tokens
+
+
+def order_in_scope(row: dict[str, Any], managed_tokens: set[int],
+                   token_by_symbol: dict[str, int]) -> bool:
+    if not managed_scope():
+        return True
+    if str(row.get("tag") or "").startswith(ENGINE_TAG_PREFIX):
+        return True
+    token = row.get("instrument_token")
+    try:
+        token = int(token) if token is not None else None
+    except (TypeError, ValueError):
+        token = None
+    if token is None:
+        token = token_by_symbol.get(str(row.get("tradingsymbol", "")))
+    return token in managed_tokens
+
+
 @dataclass(frozen=True)
 class ReconciliationReport:
     reconciled: bool
@@ -85,6 +143,7 @@ def reconcile_snapshots(
     """
     expected, issues = _expected_quantities(internal_positions)
     token_by_symbol: dict[str, int] = {}
+    engine_tokens: set[int] = set()
     seen_tokens: set[int] = set()
     for contract in contracts:
         if contract.instrument_token in seen_tokens:
@@ -94,6 +153,7 @@ def reconcile_snapshots(
             issues.append("Duplicate tradingsymbol in current contract master")
         token_by_symbol[contract.tradingsymbol] = contract.instrument_token
 
+    engine_tokens = engine_traded_tokens(broker_orders, token_by_symbol)
     if not isinstance(broker_positions, dict) or not isinstance(
         broker_positions.get("net"), list
     ):
@@ -137,10 +197,12 @@ def reconcile_snapshots(
             symbol = str(row.get("tradingsymbol", ""))
             token = token_by_symbol.get(symbol)
         if token is None:
-            if quantity:
+            if quantity and not managed_scope():
                 issues.append(
                     f"Unknown non-zero broker position: {row.get('tradingsymbol', 'UNKNOWN')}"
                 )
+            continue
+        if managed_scope() and token not in expected and token not in engine_tokens:
             continue
         actual[token] = actual.get(token, 0) + quantity
 
@@ -164,7 +226,8 @@ def reconcile_snapshots(
         status = str(order.get("status", "")).strip().upper()
         if not status:
             issues.append("Broker order row is missing status")
-        if status in ACTIVE_ORDER_STATUSES:
+        if status in ACTIVE_ORDER_STATUSES and order_in_scope(
+                order, set(expected), token_by_symbol):
             pending.append(str(order.get("order_id") or "UNKNOWN"))
     if pending:
         issues.append("Broker has pending orders requiring reconciliation")

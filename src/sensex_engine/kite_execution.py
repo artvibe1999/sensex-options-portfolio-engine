@@ -39,7 +39,13 @@ class KiteOrderExecutionAdapter:
     def tag_for_client_key(client_order_key: str) -> str:
         if not isinstance(client_order_key, str) or not client_order_key.strip():
             raise ValueError("A non-empty durable client order key is required")
-        return "SX" + sha256(client_order_key.encode("utf-8")).hexdigest()[:18]
+        return "PF" + sha256(client_order_key.encode("utf-8")).hexdigest()[:18]
+
+    @classmethod
+    def known_tags_for_client_key(cls, client_order_key: str) -> tuple[str, str]:
+        """Current tag plus the pre-rename (SX) tag, so recovery still finds old orders."""
+        tag = cls.tag_for_client_key(client_order_key)
+        return tag, "SX" + tag[2:]
 
     def submit_order(
         self, action: LegExecutionAction, *, client_order_key: str
@@ -83,12 +89,12 @@ class KiteOrderExecutionAdapter:
     def find_orders_by_client_key(
         self, client_order_key: str, *, expected_action: LegExecutionAction | None = None
     ) -> tuple[BrokerOrderReceipt, ...]:
-        tag = self.tag_for_client_key(client_order_key)
+        tags = self.known_tags_for_client_key(client_order_key)
         self._throttle_order_call()
         rows = self._client.orders()
         if not isinstance(rows, list):
             raise ValueError("Kite order book response must be a list")
-        matches = [row for row in rows if isinstance(row, dict) and row.get("tag") == tag]
+        matches = [row for row in rows if isinstance(row, dict) and row.get("tag") in tags]
         receipts: list[BrokerOrderReceipt] = []
         if matches:
             self._throttle_order_call()
@@ -105,7 +111,7 @@ class KiteOrderExecutionAdapter:
                 raise ValueError("Client tag match is not a current BFO SENSEX option")
             contract = contract_matches[0]
             if expected_action is not None:
-                self._assert_order_matches(row, action=expected_action, contract=contract, tag=tag)
+                self._assert_order_matches(row, action=expected_action, contract=contract, tag=tags)
             else:
                 quantity = int(row.get("quantity") or 0)
                 if (
@@ -194,14 +200,14 @@ class KiteOrderExecutionAdapter:
         if not isinstance(broker_order_id, str) or not broker_order_id.strip():
             raise ValueError("Broker order ID is required")
         self._require_authenticated()
-        tag = self.tag_for_client_key(client_order_key)
+        tags = self.known_tags_for_client_key(client_order_key)
         self._throttle_order_call()
         history = self._client.order_history(broker_order_id)
         rows = history if isinstance(history, list) else [history]
         if not rows or not isinstance(rows[-1], dict):
             raise ValueError("Kite order history is malformed")
         row = rows[-1]
-        if row.get("order_id") != broker_order_id or row.get("tag") != tag:
+        if row.get("order_id") != broker_order_id or row.get("tag") not in tags:
             raise ValueError("Broker order does not match the durable client reference")
         if row.get("exchange") != "BFO":
             raise ValueError("Refusing to modify/cancel a non-BFO order")
@@ -235,8 +241,9 @@ class KiteOrderExecutionAdapter:
 
     @staticmethod
     def _assert_order_matches(row, *, action, contract, tag) -> None:
+        accepted = (tag,) if isinstance(tag, str) else tuple(tag)
         expected = (
-            row.get("tag") == tag
+            row.get("tag") in accepted
             and row.get("exchange") == "BFO"
             and row.get("tradingsymbol") == contract.tradingsymbol
             and contract.instrument_token == action.instrument_token

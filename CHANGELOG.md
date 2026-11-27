@@ -1,5 +1,8 @@
 # Changelog
 
+## Unreleased - strategy engine
+- Autonomous paper-first engine: 8 defined-risk SENSEX families, market structure/indicator engine, delta-band strike optimiser with capital fit, arbitration, capital-tier dynamic risk, charges, stress/POP, exits, engine ledger, shared Kite token, Telegram engine controls, managed reconciliation scope, Docker deployment.
+
 ## Unreleased
 
 - Add the initial paper-first SENSEX portfolio engine foundation.

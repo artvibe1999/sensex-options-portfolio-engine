@@ -81,6 +81,9 @@ async def dispatch_command(
             operations.paused = True
             operations.mode.force_paper()
             operations.emergency_active = True
+            engine = getattr(operations, "engine", None)
+            if engine is not None:
+                engine.user_paused = True  # before any broker call that might raise
             try:
                 emergency = operations.emergency_close_all
                 if emergency is None:
@@ -93,11 +96,20 @@ async def dispatch_command(
                     report = await asyncio.to_thread(emergency.execute)
                     response = report.to_text()
                     outcome = "ACCEPTED" if report.completed else "INCOMPLETE"
+                if engine is not None:
+                    try:
+                        closed = await asyncio.to_thread(
+                            engine.close_all, "paper", f"operator {command}")
+                        response += f"\nPaper positions closed: {closed}. Engine entries paused."
+                    except Exception as exc:
+                        response += f"\nPaper close-all failed: {exc}"
             finally:
                 operations.emergency_active = False
         else:
+            # Route on the normalised first word but keep arguments (e.g. /close <id> confirm).
+            arguments = raw_text.strip().split()[1:]
             response = operations.handle(
-                command,
+                " ".join([command, *arguments]),
                 user_id=user_id,
                 chat_id=chat_id,
                 broker_ready=broker_ready,
@@ -207,6 +219,9 @@ def build_application_from_settings(
     post_shutdown: Callable[[Any], Any] | None = None,
     broker_factory: Callable[[str, str], Any] | None = None,
     portfolio_snapshot_provider: Callable[[], Any] | None = None,
+    limits_provider: Callable[[], Any] | None = None,
+    limit_price_provider: Callable[[Any], Any] | None = None,
+    spot_provider: Callable[[], Any] | None = None,
 ) -> Any:
     """Build Telegram with real Kite readiness dependencies and paper-only startup.
 
@@ -283,6 +298,8 @@ def build_application_from_settings(
                     order_lifecycle=orders,
                     settings=settings,
                     portfolio_snapshot_provider=portfolio_snapshot_provider,
+                    limits_provider=limits_provider,
+                    spot_provider=spot_provider,
                 )
                 from .broker_fill_ingestion import BrokerFillIngestionService
                 from .broker_submission import DurableBrokerSubmissionService
@@ -327,7 +344,9 @@ def build_application_from_settings(
                         and not operations.paused and not operations.emergency_active
                         and operations.startup_recovery_complete
                         and getattr(settings, "kite_static_ip_confirmed", False) is True
-                        and accounting_refresh is not None
+                        # Equity must come from the statement feed or an explicitly
+                        # injected authoritative snapshot provider (the engine ledger).
+                        and (accounting_refresh is not None or not use_default_snapshot)
                     )
 
                 coordinator = LiveMultiLegExecutionCoordinator(
@@ -335,7 +354,8 @@ def build_application_from_settings(
                     positions=positions,
                     submission=submission,
                     trade_history=trade_history,
-                    limit_price=build_emergency_limit_price_provider(runtime_broker),
+                    limit_price=(limit_price_provider
+                                 or build_emergency_limit_price_provider(runtime_broker)),
                     live_execution_enabled=True,
                     entry_sizing=sizing, entry_allowed=entry_allowed,
                     require_entry_approval=True,
@@ -380,6 +400,7 @@ def build_application_from_settings(
     application.bot_data["portfolio_accounting"] = accounting
     application.bot_data["accounting_refresh"] = accounting_refresh
     application.bot_data["live_execution_coordinator"] = coordinator
+    application.bot_data["entry_sizing"] = getattr(coordinator, "_entry_sizing", None)
     application.bot_data["portfolio_snapshot_provider"] = portfolio_snapshot_provider
     application.bot_data["kite_broker"] = runtime_broker
     application.bot_data["kite_order_execution_adapter"] = order_execution_adapter

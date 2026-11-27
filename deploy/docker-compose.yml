@@ -1,0 +1,24 @@
+# Second container on the sxbot VM. Shares the primary bot's Kite app by reading
+# its daily token file read-only; never logs in to Kite itself.
+services:
+  engine:
+    build: ..
+    image: sxhedge-engine:latest
+    container_name: sxhedge-engine
+    # Run as the VM user that owns ~/sxbot/data/token.json (mode 600) and ./data.
+    user: "${ENGINE_UID:-1000}:${ENGINE_GID:-1003}"
+    env_file: .env
+    environment:
+      KITE_TOKEN_FILE: /shared/sxbot/token.json
+      ENGINE_DB_PATH: /app/data/engine.db
+      DATABASE_URL: sqlite:////app/data/portfolio.db
+      HEARTBEAT_PATH: /app/data/heartbeat
+      RECONCILE_SCOPE: managed
+    volumes:
+      - ./data:/app/data
+      - ${SXBOT_DATA_DIR:-/home/amazoncentres/sxbot/data}:/shared/sxbot:ro
+    restart: unless-stopped
+    mem_limit: 400m
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "5" }

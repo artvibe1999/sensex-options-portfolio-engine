@@ -41,14 +41,21 @@ def adaptive_risk_budget(
     peak_equity: Decimal,
     base_risk_pct: Decimal = Decimal("0.0075"),
     base_aggregate_pct: Decimal = Decimal("0.02"),
+    band_scale: Decimal = Decimal("1"),
 ) -> AdaptiveRiskBudget:
-    """Reduce risk as peak-to-current drawdown rises; never scale beyond base."""
+    """Reduce risk as peak-to-current drawdown rises; never scale beyond base.
+
+    ``band_scale`` widens the 3/5/7/10% drawdown bands proportionally for
+    capital tiers that take more than the baseline risk per trade.
+    """
+    if not band_scale.is_finite() or band_scale < 1:
+        raise ValueError("Drawdown band scale must be at least 1")
     if equity <= 0 or peak_equity <= 0:
         return AdaptiveRiskBudget(
             Decimal("0"), Decimal("0"), Decimal("0"), False, "Invalid equity"
         )
     drawdown = max(Decimal("0"), (peak_equity - equity) / peak_equity)
-    if drawdown >= Decimal("0.10"):
+    if drawdown >= Decimal("0.10") * band_scale:
         return AdaptiveRiskBudget(
             Decimal("0"),
             Decimal("0"),
@@ -58,11 +65,11 @@ def adaptive_risk_budget(
         )
     multiplier = Decimal("1")
     reason = "Normal risk budget"
-    if drawdown >= Decimal("0.07"):
+    if drawdown >= Decimal("0.07") * band_scale:
         multiplier, reason = Decimal("0"), "Trading paused for drawdown review"
-    elif drawdown >= Decimal("0.05"):
+    elif drawdown >= Decimal("0.05") * band_scale:
         multiplier, reason = Decimal("0.50"), "Risk reduced 50% at 5-7% drawdown"
-    elif drawdown >= Decimal("0.03"):
+    elif drawdown >= Decimal("0.03") * band_scale:
         multiplier, reason = Decimal("0.75"), "Risk reduced 25% at 3-5% drawdown"
     return AdaptiveRiskBudget(
         risk_pct=base_risk_pct * multiplier,

@@ -1,0 +1,932 @@
+"""Autonomous SENSEX portfolio engine loop (paper by default, live on confirmation).
+
+Every cycle (default 30 s) during the regular session it:
+1. refreshes the shared Kite token, contract master, quotes and 5-minute bars;
+2. builds the market state, option chains, ATM IV and expected move;
+3. marks and manages every open position (daily loss stop, invalidation,
+   square-off, target, stop, time stop) at executable bid/ask;
+4. on each newly completed 5-minute bar, evaluates all eight strategy
+   families, arbitrates, sizes against current equity and the capital-tier
+   policy, re-checks the existing RiskEngine, and executes.
+
+Paper fills are simulated at bid/ask with the versioned charge model. Live
+entries/exits go through the durable fill-confirmed live coordinator and are
+only possible after Telegram /live + /confirm_live and every readiness gate.
+"""
+
+from __future__ import annotations
+
+import logging
+import threading
+import time as _time
+from collections.abc import Callable
+from dataclasses import dataclass, field, replace
+from datetime import UTC, date, datetime, time, timedelta
+from decimal import ROUND_FLOOR, Decimal
+from typing import Any
+from uuid import UUID
+
+from .arbitration import arbitrate
+from .book import BookLeg, BookPosition, EngineBook, new_position_id
+from .capital_policy import RiskPolicy, risk_policy
+from .charges import ChargeSchedule, leg_charges
+from .domain import OptionLeg, PortfolioSnapshot, Position, Side, TradingMode
+from .exits import evaluate_exit
+from .indicators import IST
+from .market_feed import INDEX_TOKEN, FeedSnapshot, MarketFeed, atm_iv
+from .market_state import MarketState, build_market_state, with_options
+from .risk import RiskEngine
+from .scenario import expiry_close, years_between
+from .strategies import (
+    IRON_BUTTERFLY,
+    MarketContext,
+    Proposal,
+    StrategyConfig,
+    evaluate_all,
+)
+
+logger = logging.getLogger(__name__)
+SESSION_START, SESSION_END = time(9, 15), time(15, 30)
+MAX_SPOT_AGE_SECONDS = 120
+
+
+@dataclass
+class EngineConfig:
+    cycle_seconds: int = 30
+    square_off: time = time(15, 10)
+    # Operator stop percentages (only set when given explicitly); they can only tighten.
+    daily_stop_override: Decimal | None = None
+    weekly_stop_override: Decimal | None = None
+    monthly_stop_override: Decimal | None = None
+    # Hard engine-level entry cutoff, independent of each strategy's own window.
+    entry_cutoff: time = time(14, 30)
+    max_entries_per_day: int = 3
+    max_margin_utilization: Decimal = Decimal("0.70")
+    paper_start_capital: Decimal | None = None
+    risk_scale: Decimal = Decimal("1")
+    enabled_strategies: frozenset[str] | None = None
+    freeze_quantity: int = 1000
+    strategy: StrategyConfig = field(default_factory=StrategyConfig)
+    charges: ChargeSchedule = field(default_factory=ChargeSchedule)
+
+
+class Notifier:
+    """Alert sink. The default logs only; Telegram is attached when configured."""
+
+    def __init__(self, sender: Callable[[str], None] | None = None) -> None:
+        self._sender = sender
+
+    def attach(self, sender: Callable[[str], None]) -> None:
+        self._sender = sender
+
+    def send(self, text: str) -> None:
+        logger.info("ALERT %s", text.replace("\n", " | "))
+        if self._sender is not None:
+            try:
+                self._sender(text)
+            except Exception:
+                logger.exception("Alert delivery failed")
+
+
+class LiveEntryError(RuntimeError):
+    pass
+
+
+class LiveBridge:
+    """Adapter between the engine book and the durable live coordinator."""
+
+    def __init__(
+        self,
+        *,
+        coordinator: Any,
+        positions: Any,
+        sizing: Any,
+        adapter: Any,
+        snapshot_provider: Callable[[], PortfolioSnapshot | None],
+    ) -> None:
+        self.coordinator = coordinator
+        self.positions = positions
+        self.sizing = sizing
+        self.adapter = adapter
+        self.snapshot_provider = snapshot_provider
+
+    def open(
+        self, proposal: Proposal, *, lots: int, policy: RiskPolicy, allocation_pct: Decimal
+    ) -> tuple[str, int, dict[int, float]]:
+        if proposal.multi_expiry:
+            raise LiveEntryError("Multi-expiry live sizing is not supported; paper only")
+        self.sizing.risk = RiskEngine(policy.limits)
+        candidate = proposal.to_candidate(1)
+        tokens = [leg.contract.instrument_token for leg in candidate.legs]
+        quotes = self.adapter.quotes(tokens)
+        if len(quotes) != len(tokens):
+            raise LiveEntryError("Fresh quotes unavailable for every leg")
+        candidate = replace(candidate, data_timestamp=min(q.timestamp for q in quotes.values()))
+        report = self.coordinator.execute_sized(
+            candidate, max_lots=lots, allocation_pct=allocation_pct
+        )
+        snap = self.positions.snapshot(report.position_id)
+        if not report.completed or snap is None:
+            raise LiveEntryError(
+                f"Live entry incomplete: {report.reason}; residual={report.residual_exposure}"
+            )
+        fills = {
+            int(leg["instrument_token"]): float(leg["open_average_price"]) for leg in snap["legs"]
+        }
+        lot_size = proposal.lot_size
+        live_lots = int(snap["legs"][0]["quantity"]) // lot_size
+        return report.position_id, live_lots, fills
+
+    def close(self, position: BookPosition, contracts: dict[int, Any]) -> dict[int, float]:
+        assert position.broker_position_id
+        snap = self.positions.snapshot(position.broker_position_id)
+        if snap is None:
+            raise RuntimeError("Durable live position is unavailable")
+        legs = []
+        for leg in snap["legs"]:
+            contract = contracts.get(int(leg["instrument_token"]))
+            if contract is None:
+                raise RuntimeError(f"Contract {leg['tradingsymbol']} missing from master")
+            legs.append(
+                OptionLeg(contract, Side(leg["side"]), int(leg["quantity"]) // contract.lot_size)
+            )
+        live_position = Position(
+            UUID(position.broker_position_id),
+            snap["strategy_id"],
+            tuple(legs),
+            TradingMode.LIVE,
+            datetime.now(UTC),
+        )
+        from .execution import ExecutionPhase
+
+        report = self.coordinator.execute(live_position, ExecutionPhase.CLOSE)
+        final = self.positions.snapshot(position.broker_position_id)
+        if not report.completed or final is None:
+            raise RuntimeError(
+                f"Live close incomplete: {report.reason}; residual={report.residual_exposure}"
+            )
+        return {
+            int(leg["instrument_token"]): float(leg["close_average_price"]) for leg in final["legs"]
+        }
+
+
+class Engine:
+    def __init__(
+        self,
+        *,
+        feed: MarketFeed,
+        book: EngineBook,
+        notifier: Notifier,
+        config: EngineConfig,
+        token_refresh: Callable[[], Any] | None = None,
+        operations: Any | None = None,
+        live: LiveBridge | None = None,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
+        self.feed = feed
+        self.book = book
+        self.notifier = notifier
+        self.config = config
+        self.token_refresh = token_refresh
+        self.operations = operations
+        self.live = live
+        self.clock = clock or (lambda: datetime.now(IST))
+        self.user_paused = False
+        self.last_state: MarketState | None = None
+        self.last_evaluations: list = []
+        self.last_arbitration: str = ""
+        self.last_error: str = ""
+        self.last_cycle_at: datetime | None = None
+        self.last_snapshot: FeedSnapshot | None = None
+        self.last_policy: RiskPolicy | None = None
+        self._last_bar: datetime | None = None
+        self._summary_day: date | None = None
+        self._stale_alerted = False
+        self._lock = threading.RLock()
+        self._stop = threading.Event()
+
+    # ----------------------------------------------------------- mode/status
+    @property
+    def mode(self) -> str:
+        if self.operations is not None and self.operations.mode.mode is TradingMode.LIVE:
+            return "live"
+        return "paper"
+
+    def entries_allowed(self, mode: str) -> tuple[bool, str]:
+        if self.user_paused:
+            return False, "entries paused by operator"
+        if mode == "live":
+            ops = self.operations
+            if ops is None or self.live is None:
+                return False, "live execution is not configured"
+            if ops.paused or ops.emergency_active or not ops.startup_recovery_complete:
+                return False, "live gates closed (paused/emergency/recovery)"
+        return True, ""
+
+    # ----------------------------------------------------------------- loop
+    def run_forever(self) -> None:
+        logger.info("Engine loop started (cycle %ss)", self.config.cycle_seconds)
+        while not self._stop.is_set():
+            started = _time.monotonic()
+            try:
+                self.cycle()
+            except Exception as exc:
+                self.last_error = f"{type(exc).__name__}: {exc}"[:300]
+                logger.exception("Engine cycle failed")
+            elapsed = _time.monotonic() - started
+            self._stop.wait(max(1.0, self.config.cycle_seconds - elapsed))
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def cycle(self) -> None:
+        with self._lock:
+            now = self.clock()
+            local = now.astimezone(IST)
+            self.last_cycle_at = now
+            if local.weekday() >= 5 or not SESSION_START <= local.time() <= SESSION_END:
+                if local.time() > SESSION_END and self._summary_day != local.date():
+                    self._daily_summary(local.date())
+                return
+            if self.token_refresh is not None:
+                info = self.token_refresh()
+                if not getattr(info, "token", ""):
+                    self.last_error = (
+                        "No Kite access token (shared token file missing and no env token)"
+                    )
+                    return
+            self.feed.refresh_contracts(now)
+            open_positions = self.book.open_positions()
+            extra = {leg.instrument_token for p in open_positions for leg in p.legs}
+            snap = self.feed.snapshot(now, extra_tokens=extra)
+            self.last_snapshot = snap
+            spot_age = (now - snap.spot_time).total_seconds()
+            if spot_age > MAX_SPOT_AGE_SECONDS:
+                self.last_error = (
+                    f"SENSEX index quote is {spot_age:.0f}s old (market closed/holiday?)"
+                )
+                if open_positions and not self._stale_alerted:
+                    self.notifier.send(
+                        f"Market data STALE ({spot_age:.0f}s). New entries frozen; "
+                        f"{len(open_positions)} position(s) held, will retry."
+                    )
+                    self._stale_alerted = True
+                return
+            self._stale_alerted = False
+            state, new_bar = self._market_state(now, snap)
+            near = self.feed.chain(snap, snap.near_expiry)
+            far = self.feed.chain(snap, snap.far_expiry)
+            if state is not None:
+                iv_near, straddle = atm_iv(near)
+                iv_far, _ = atm_iv(far)
+                state = with_options(
+                    state,
+                    atm_iv_near=iv_near,
+                    atm_iv_far=iv_far,
+                    straddle_near=straddle,
+                    days_to_near_expiry=years_between(now, expiry_close(snap.near_expiry)) * 365,
+                )
+                self.last_state = state
+            deltas = {
+                a.contract.instrument_token: float(a.delta)
+                for chain in (near, far)
+                if chain
+                for a in chain.analytics
+            }
+            self._manage_positions(now, snap, state, new_bar, deltas)
+            if new_bar and state is not None and near is not None:
+                self._consider_entry(now, snap, state, near, far)
+            self.last_error = ""
+
+    # ------------------------------------------------------------ helpers
+    def _market_state(self, now: datetime, snap: FeedSnapshot) -> tuple[MarketState | None, bool]:
+        try:
+            index_bars = self.feed.bars(INDEX_TOKEN, now)
+            future_bars = self.feed.bars(snap.future_token, now) if snap.future_token else None
+            state = build_market_state(
+                index_bars, now=now, spot=float(snap.spot), future_bars=future_bars
+            )
+        except Exception as exc:
+            self.last_error = f"market state unavailable: {exc}"[:300]
+            return None, False
+        new_bar = state.bar_time != self._last_bar
+        if new_bar:
+            self._last_bar = state.bar_time
+        return state, new_bar
+
+    def _marks(self, position: BookPosition, snap: FeedSnapshot) -> dict[int, float] | None:
+        marks: dict[int, float] = {}
+        for leg in position.legs:
+            quote = snap.quotes.get(leg.instrument_token)
+            if quote is None:
+                return None
+            if leg.side == "BUY":  # close by selling at bid; no bid means no value
+                marks[leg.instrument_token] = float(quote.bid)
+            else:  # close by buying at ask
+                if quote.ask <= 0:
+                    return None
+                marks[leg.instrument_token] = float(quote.ask)
+        return marks
+
+    def _exit_costs(self, position: BookPosition, prices: dict[int, float]) -> Decimal:
+        total = Decimal("0")
+        for leg in position.legs:
+            side = "SELL" if leg.side == "BUY" else "BUY"
+            total += leg_charges(
+                side=side,
+                price=Decimal(str(prices[leg.instrument_token])),
+                quantity=leg.quantity,
+                schedule=self.config.charges,
+            ).total
+        return total
+
+    # ------------------------------------------------------------ equity
+    def _kite_start_of_day_funds(self) -> Decimal:
+        margins = self.feed.adapter.margins("equity")
+        available = margins.get("available") or {}
+        opening = Decimal(str(available.get("opening_balance", 0) or 0))
+        payin = Decimal(str(available.get("intraday_payin", 0) or 0))
+        value = opening + payin
+        if value <= 0:
+            value = Decimal(str(margins.get("net", 0) or 0))
+        if value <= 0:
+            raise RuntimeError("Kite funds are not positive")
+        return value
+
+    def start_of_day_equity(self, mode: str, today: date) -> Decimal:
+        row = self.book.equity_day(mode, today)
+        if row:
+            return Decimal(row["start_equity"])
+        if mode == "paper":
+            base_raw = self.book.get_state("paper_base_capital")
+            if base_raw is None:
+                base = self.config.paper_start_capital or self._kite_start_of_day_funds()
+                self.book.set_state("paper_base_capital", str(base))
+                self.notifier.send(
+                    f"Paper capital initialised at Rs{base:,.0f} "
+                    "(compounds with realised paper P&L)."
+                )
+            else:
+                base = Decimal(base_raw)
+            start = base + self.book.realized_total("paper")
+        else:
+            start = self._kite_start_of_day_funds()
+        return Decimal(self.book.start_day(mode, today, start)["start_equity"])
+
+    def _unrealized(self, positions: list[BookPosition], snap: FeedSnapshot | None) -> Decimal:
+        total = Decimal("0")
+        for p in positions:
+            marks = self._marks(p, snap) if snap else None
+            if marks is not None:
+                total += Decimal(str(round(p.unrealized(marks) or 0.0, 2)))
+            else:  # unknown mark: assume worst case, never optimistic
+                total -= p.max_loss
+        return total
+
+    def portfolio(self, mode: str, now: datetime) -> tuple[PortfolioSnapshot, RiskPolicy]:
+        today = now.astimezone(IST).date()
+        sod = self.start_of_day_equity(mode, today)
+        open_positions = self.book.open_positions(mode)
+        realized_today = self.book.realized_total(mode, day=today.isoformat())
+        unrealized = self._unrealized(open_positions, self.last_snapshot)
+        equity = sod + realized_today + unrealized
+        row = self.book.equity_day(mode, today) or {}
+        peak = max(Decimal(row.get("peak_equity", sod)), equity)
+        self.book.update_peak(mode, today, equity)
+        week_ref = self.book.period_reference(mode, today - timedelta(days=today.weekday())) or sod
+        month_ref = self.book.period_reference(mode, today.replace(day=1)) or sod
+        policy = self._policy(equity, peak)
+        used_margin = sum(Decimal(str(p.meta.get("margin", p.max_loss))) for p in open_positions)
+        family: dict[str, Decimal] = {}
+        for p in open_positions:
+            family[p.strategy_id] = (
+                family.get(p.strategy_id, Decimal("0")) + p.max_loss + p.entry_costs
+            )
+        margin_room = max(equity * self.config.max_margin_utilization - used_margin, Decimal("0"))
+        if mode == "live":
+            # Never assume more margin than the broker reports as available right now.
+            broker_net = Decimal(str(self.feed.adapter.margins("equity").get("net", 0) or 0))
+            margin_room = min(margin_room, max(broker_net, Decimal("0")))
+        snapshot = PortfolioSnapshot(
+            net_liquidation_equity=equity,
+            available_margin=margin_room,
+            open_max_loss=sum((p.max_loss + p.entry_costs for p in open_positions), Decimal("0")),
+            daily_realized_pnl=realized_today,
+            daily_unrealized_pnl=unrealized,
+            weekly_drawdown_pct=max(Decimal("0"), (week_ref - equity) / week_ref),
+            monthly_drawdown_pct=max(Decimal("0"), (month_ref - equity) / month_ref),
+            open_positions=len(open_positions),
+            entries_today=int(row.get("entries", 0)),
+            peak_equity=peak,
+            start_of_day_equity=sod,
+            strategy_open_risk=tuple(sorted(family.items())),
+        )
+        self.last_policy = policy
+        return snapshot, policy
+
+    def live_snapshot(self) -> PortfolioSnapshot | None:
+        try:
+            return self.portfolio("live", self.clock())[0]
+        except Exception:
+            logger.exception("Live portfolio snapshot unavailable")
+            return None
+
+    def live_limits(self):
+        snap = self.live_snapshot()
+        if snap is None:
+            return None
+        return self._policy(
+            snap.net_liquidation_equity, snap.peak_equity or snap.net_liquidation_equity
+        ).limits
+
+    def _policy(self, equity: Decimal, peak: Decimal) -> RiskPolicy:
+        return risk_policy(
+            equity=equity,
+            peak_equity=peak,
+            max_new_entries_per_day=self.config.max_entries_per_day,
+            max_margin_utilization_pct=self.config.max_margin_utilization,
+            risk_scale=self.config.risk_scale,
+            daily_stop_override=self.config.daily_stop_override,
+            weekly_stop_override=self.config.weekly_stop_override,
+            monthly_stop_override=self.config.monthly_stop_override,
+        )
+
+    # ------------------------------------------------------------ exits
+    def _manage_positions(
+        self,
+        now: datetime,
+        snap: FeedSnapshot,
+        state: MarketState | None,
+        new_bar: bool,
+        deltas: dict[int, float],
+    ) -> None:
+        today = now.astimezone(IST).date()
+        for mode in ("paper", "live"):
+            positions = self.book.open_positions(mode)
+            if not positions:
+                continue
+            portfolio, policy = self.portfolio(mode, now)
+            daily = portfolio.daily_realized_pnl + portfolio.daily_unrealized_pnl
+            limit = (
+                portfolio.start_of_day_equity or portfolio.net_liquidation_equity
+            ) * policy.limits.daily_loss_stop_pct
+            # Unpriced legs are valued at max loss for sizing (never optimistic), but a
+            # forced liquidation must not be triggered by that assumption alone.
+            all_priced = all(self._marks(p, snap) is not None for p in positions)
+            if daily <= -limit and not all_priced:
+                self.last_error = "daily-stop check deferred: a leg has no executable quote"
+            elif daily <= -limit:
+                self.book.set_halted(mode, today)
+                for p in positions:
+                    self._close(p, snap, f"daily loss stop Rs{limit:,.0f} reached", now)
+                self.notifier.send(
+                    f"[{mode.upper()}] Daily loss stop hit (Rs{daily:,.0f}); "
+                    "all positions closed, entries halted for today."
+                )
+                continue
+            for p in positions:
+                if p.status == "ERROR":
+                    continue
+                marks = self._marks(p, snap)
+                if new_bar:
+                    p.meta["bars_held"] = int(p.meta.get("bars_held", 0)) + 1
+                    self.book.update_meta(p.id, p.meta)
+                if marks is None:
+                    if now.astimezone(IST).time() >= self.config.square_off:
+                        self.notifier.send(
+                            f"[{mode.upper()}] {p.strategy_id} {p.id}: cannot price "
+                            "legs at square-off; retrying each cycle."
+                        )
+                    continue
+                pnl = (p.unrealized(marks) or 0.0) - float(self._exit_costs(p, marks))
+                p.meta["last_pnl"] = round(pnl, 2)
+                p.meta["peak_pnl"] = max(float(p.meta.get("peak_pnl", pnl)), pnl)
+                shorts = {
+                    leg.instrument_token: deltas[leg.instrument_token]
+                    for leg in p.legs
+                    if leg.side == "SELL" and leg.instrument_token in deltas
+                }
+                decision = evaluate_exit(
+                    p,
+                    pnl=pnl,
+                    short_deltas=shorts,
+                    state=state,
+                    new_bar=new_bar,
+                    now=now,
+                    square_off=self.config.square_off,
+                )
+                self.book.update_meta(p.id, p.meta)
+                if decision is not None:
+                    self._close(p, snap, decision.reason, now)
+
+    def _close(self, p: BookPosition, snap: FeedSnapshot, reason: str, now: datetime) -> None:
+        try:
+            if p.mode == "live":
+                if self.live is None:
+                    raise RuntimeError("live bridge unavailable")
+                self.book.set_status(p.id, "CLOSING", reason)
+                prices = self.live.close(p, self.feed.by_token)
+            else:
+                prices = self._marks(p, snap)
+                if prices is None:
+                    raise RuntimeError("no executable exit prices")
+            costs = self._exit_costs(p, prices)
+            pnl = self.book.close_position(
+                p.id, exit_prices=prices, exit_costs=costs, reason=reason, closed_at=now
+            )
+        except Exception as exc:
+            self.book.set_status(p.id, "ERROR" if p.mode == "live" else p.status, None)
+            self.notifier.send(
+                f"[{p.mode.upper()}] EXIT FAILED {p.strategy_id} {p.id}: {exc}. "
+                + ("Manual check required." if p.mode == "live" else "Will retry.")
+            )
+            return
+        legs = ", ".join(
+            f"{leg.side} {leg.tradingsymbol} {leg.entry_price}->{prices[leg.instrument_token]}"
+            for leg in p.legs
+        )
+        self.notifier.send(
+            f"[{p.mode.upper()}] EXIT {p.strategy_id} x{p.lots} | {reason}\n"
+            f"P&L Rs{pnl:,.2f} (charges Rs{p.entry_costs + costs:,.2f})\n{legs}"
+        )
+        self.book.log_decision("exit", {"position": p.id, "reason": reason, "pnl": str(pnl)}, now)
+
+    def close_all(self, mode: str, reason: str) -> int:
+        """Operator-initiated controlled close (paper; live goes through emergency close-all)."""
+        with self._lock:
+            snap = self._fresh_snapshot()
+            if snap is None:
+                raise RuntimeError("market snapshot is missing or stale; cannot price closes")
+            count = 0
+            for p in self.book.open_positions(mode):
+                self._close(p, snap, reason, self.clock())
+                count += 1
+            return count
+
+    def _fresh_snapshot(self) -> FeedSnapshot | None:
+        snap = self.last_snapshot
+        if snap is None or (self.clock() - snap.as_of).total_seconds() > MAX_SPOT_AGE_SECONDS:
+            return None
+        return snap
+
+    def close_one(self, position_id: str, *, user_id: int | None = None) -> str:
+        """Operator-confirmed controlled close of one engine position."""
+        with self._lock:
+            position = self.book.get(position_id)
+            if position is None or position.status == "CLOSED":
+                return f"No open engine position {position_id}."
+            snap = self._fresh_snapshot()
+            if snap is None:
+                return "Market snapshot is missing or stale; cannot price the close now."
+            self._close(position, snap, f"operator /close by {user_id}", self.clock())
+            after = self.book.get(position_id)
+            if after is not None and after.status == "CLOSED":
+                return f"Closed {position_id}: P&L Rs{after.realized_pnl:,.2f}."
+            status = after.status if after else "?"
+            return f"Close of {position_id} did not complete (status {status})."
+
+    # ----------------------------------------------------------- entries
+    def _consider_entry(
+        self, now: datetime, snap: FeedSnapshot, state: MarketState, near, far
+    ) -> None:
+        mode = self.mode
+        allowed, why = self.entries_allowed(mode)
+        today = now.astimezone(IST).date()
+        portfolio, policy = self.portfolio(mode, now)
+        row = self.book.equity_day(mode, today) or {}
+        ctx = MarketContext(state=state, near=near, far=far, oi=snap.oi(), now=now)
+        budget = policy.max_trade_risk
+        evaluations = evaluate_all(
+            ctx,
+            risk_budget=budget,
+            cfg=self.config.strategy,
+            enabled=self.config.enabled_strategies,
+        )
+        self.last_evaluations = evaluations
+        open_positions = self.book.open_positions(mode)
+        result = arbitrate(
+            evaluations,
+            open_strategies=[p.strategy_id for p in open_positions],
+            max_concurrent=policy.tier.max_concurrent_positions,
+        )
+        blocked = ""
+        if now.astimezone(IST).time() >= self.config.entry_cutoff:
+            blocked = f"entry cutoff {self.config.entry_cutoff:%H:%M} IST passed"
+        elif not allowed:
+            blocked = why
+        elif row.get("halted"):
+            blocked = "daily loss stop active for today"
+        elif not policy.entries_allowed:
+            blocked = f"drawdown policy: {policy.reason}"
+        elif int(row.get("entries", 0)) >= self.config.max_entries_per_day:
+            blocked = f"max {self.config.max_entries_per_day} entries per day reached"
+        self.last_arbitration = blocked or result.reason
+        self.book.log_decision(
+            "evaluation",
+            {
+                "mode": mode,
+                "bar": state.bar_time,
+                "regime": state.regime.value,
+                "spot": state.spot,
+                "policy": policy.describe(),
+                "arbitration": self.last_arbitration,
+                "eligible": [e.strategy_id for e in evaluations if e.eligible],
+            },
+            now,
+        )
+        if blocked or result.selected is None:
+            return
+        proposal = result.selected
+        lots, margin_per_lot, why = self._size(proposal, mode, portfolio, policy)
+        if lots < 1:
+            self.last_arbitration = f"{proposal.strategy_id} not sized: {why}"
+            return
+        self._open(proposal, lots, margin_per_lot, mode, policy, state, now)
+
+    def _margin_per_lot(self, proposal: Proposal) -> tuple[Decimal, str]:
+        legs = tuple(OptionLeg(a.contract, side, 1) for a, side in proposal.legs)
+        prices = {
+            a.contract.instrument_token: p
+            for (a, _), p in zip(proposal.legs, proposal.prices, strict=True)
+        }
+        try:
+            return self.feed.adapter.basket_margin(legs, prices), "broker basket margin"
+        except Exception as exc:
+            estimate = max(proposal.max_loss_per_lot, abs(proposal.net_debit_per_lot)) * Decimal(
+                "1.25"
+            )
+            return estimate, f"estimated (basket margin unavailable: {type(exc).__name__})"
+
+    def _size(
+        self, proposal: Proposal, mode: str, portfolio: PortfolioSnapshot, policy: RiskPolicy
+    ) -> tuple[int, Decimal, str]:
+        risk_lot = proposal.risk_per_lot
+        budget = policy.max_trade_risk
+        if proposal.strategy_id == IRON_BUTTERFLY:
+            budget *= self.config.strategy.ib_risk_fraction
+        aggregate_room = policy.max_aggregate_risk - portfolio.open_max_loss
+        by_risk = int((min(budget, aggregate_room) / risk_lot).to_integral_value(ROUND_FLOOR))
+        margin_lot, margin_source = self._margin_per_lot(proposal)
+        by_margin = int((portfolio.available_margin / margin_lot).to_integral_value(ROUND_FLOOR))
+        depth = min(
+            (a.quote.ask_quantity if side is Side.BUY else a.quote.bid_quantity)
+            // proposal.lot_size
+            for a, side in proposal.legs
+        )
+        by_freeze = self.config.freeze_quantity // proposal.lot_size
+        lots = max(0, min(by_risk, by_margin, depth, by_freeze))
+        detail = (
+            f"risk {by_risk}, margin {by_margin} ({margin_source} Rs{margin_lot:,.0f}/lot), "
+            f"depth {depth}, freeze {by_freeze}"
+        )
+        risk = RiskEngine(policy.limits)
+        while lots >= 1:
+            candidate = proposal.to_candidate(lots)
+            decision = risk.evaluate(
+                candidate,
+                portfolio,
+                estimated_margin=margin_lot * lots,
+                data_is_fresh=True,
+                contracts_are_current=True,
+                broker_reconciled=True,
+            )
+            if decision.approved:
+                return lots, margin_lot, detail
+            detail = f"{decision.reason}; {detail}"
+            lots -= 1
+        return 0, margin_lot, detail
+
+    def _open(
+        self,
+        proposal: Proposal,
+        lots: int,
+        margin_lot: Decimal,
+        mode: str,
+        policy: RiskPolicy,
+        state: MarketState,
+        now: datetime,
+    ) -> None:
+        broker_position_id = None
+        prices = {
+            a.contract.instrument_token: float(p)
+            for (a, _), p in zip(proposal.legs, proposal.prices, strict=True)
+        }
+        if mode == "live":
+            assert self.live is not None
+            try:
+                broker_position_id, lots, prices = self.live.open(
+                    proposal,
+                    lots=lots,
+                    policy=policy,
+                    allocation_pct=self.config.max_margin_utilization,
+                )
+            except Exception as exc:
+                # Possible residual broker exposure: stop all new entries, leave live mode,
+                # and hand over to the operator / emergency close-all (durable ledger).
+                self.user_paused = True
+                if self.operations is not None:
+                    self.operations.paused = True
+                    self.operations.mode.force_paper()
+                self.notifier.send(
+                    f"[LIVE] ENTRY NOT COMPLETED {proposal.strategy_id}: {exc}\n"
+                    "Entries PAUSED and mode forced to PAPER. Check Kite positions; "
+                    "use /emergency to flatten any residual legs."
+                )
+                self.book.log_decision(
+                    "live_entry_failed", {"strategy": proposal.strategy_id, "error": str(exc)}, now
+                )
+                return
+        legs = [
+            BookLeg(
+                a.contract.instrument_token,
+                a.contract.tradingsymbol,
+                a.contract.right.value,
+                float(a.contract.strike),
+                a.contract.expiry.isoformat(),
+                side.value,
+                lots * proposal.lot_size,
+                prices[a.contract.instrument_token],
+                float(a.implied_volatility),
+            )
+            for a, side in proposal.legs
+        ]
+        entry_net = sum(
+            (
+                Decimal(str(leg.entry_price)) * leg.quantity * (1 if leg.side == "BUY" else -1)
+                for leg in legs
+            ),
+            Decimal("0"),
+        )
+        entry_costs = sum(
+            (
+                leg_charges(
+                    side=leg.side,
+                    price=Decimal(str(leg.entry_price)),
+                    quantity=leg.quantity,
+                    schedule=self.config.charges,
+                ).total
+                for leg in legs
+            ),
+            Decimal("0"),
+        )
+        plan = proposal.exit_plan
+        position = BookPosition(
+            id=new_position_id(),
+            mode=mode,
+            strategy_id=proposal.strategy_id,
+            status="OPEN",
+            opened_at=now.isoformat(),
+            session_day=now.astimezone(IST).date().isoformat(),
+            lots=lots,
+            lot_size=proposal.lot_size,
+            entry_net=entry_net,
+            max_loss=proposal.max_loss_per_lot * lots,
+            max_profit=None
+            if proposal.max_profit_per_lot is None
+            else proposal.max_profit_per_lot * lots,
+            entry_costs=entry_costs,
+            legs=legs,
+            exit_plan=plan.__dict__.copy(),
+            meta={
+                "score": round(proposal.score, 1),
+                "components": {k: round(v, 1) for k, v in proposal.components.items()},
+                "pop": round(proposal.pop, 3),
+                "margin": str(margin_lot * lots),
+                "regime": state.regime.value,
+                "spot": state.spot,
+                "bars_held": 0,
+                "rationale": proposal.rationale,
+                "policy": policy.describe(),
+                "multi_expiry": proposal.multi_expiry,
+            },
+            broker_position_id=broker_position_id,
+        )
+        self.book.open_position(position)
+        self.book.log_decision(
+            "entry",
+            {"position": position.id, "strategy": proposal.strategy_id, "lots": lots, "mode": mode},
+            now,
+        )
+        be = ", ".join(f"{b:.0f}" for b in proposal.breakevens) or "n/a (multi-expiry)"
+        self.notifier.send(
+            f"[{mode.upper()}] ENTRY {proposal.strategy_id} x{lots} lot(s) "
+            f"@ spot {state.spot:,.0f}\n"
+            f"{proposal.describe_legs()}\n"
+            f"Net {'debit' if entry_net > 0 else 'credit'} Rs{abs(entry_net):,.0f} | max loss "
+            f"Rs{position.max_loss:,.0f} | max profit "
+            f"{'unbounded' if position.max_profit is None else f'Rs{position.max_profit:,.0f}'} | "
+            f"BE {be}\nScore {proposal.score:.1f} POP {proposal.pop:.0%} | {proposal.rationale}\n"
+            f"{policy.describe()}"
+        )
+
+    # ---------------------------------------------------------- reporting
+    def _daily_summary(self, day: date) -> None:
+        self._summary_day = day
+        lines = []
+        for mode in ("paper", "live"):
+            closed = [p for p in self.book.closed_positions(mode=mode, since_day=day.isoformat())]
+            if not closed and not self.book.open_positions(mode):
+                continue
+            total = sum((p.realized_pnl or Decimal("0") for p in closed), Decimal("0"))
+            wins = sum(1 for p in closed if (p.realized_pnl or 0) > 0)
+            lines.append(
+                f"[{mode.upper()}] {len(closed)} trade(s), {wins} win(s), net Rs{total:,.2f}"
+            )
+            lines += [
+                f"  {p.strategy_id} x{p.lots}: Rs{p.realized_pnl:,.2f} ({p.exit_reason})"
+                for p in closed
+            ]
+            if self.book.open_positions(mode):
+                lines.append(
+                    f"  WARNING: {len(self.book.open_positions(mode))} position(s) still open"
+                )
+        if lines:
+            self.notifier.send(f"Daily summary {day.isoformat()}\n" + "\n".join(lines))
+
+    def status_text(self) -> str:
+        s = self.last_state
+        parts = [
+            f"engine mode={self.mode}; paper entries {'PAUSED' if self.user_paused else 'active'}",
+            f"last cycle {self.last_cycle_at:%H:%M:%S}" if self.last_cycle_at else "no cycle yet",
+        ]
+        if s is not None:
+            parts.append(
+                f"SENSEX {s.spot:,.1f} | bar {s.bar_time.astimezone(IST):%H:%M} | regime "
+                f"{s.regime.value} ({s.bias}) | ADX {s.adx:.1f} RSI {s.rsi:.1f} | VWAP "
+                f"{'n/a' if s.vwap is None else f'{s.vwap:,.1f}'} | ATM IV "
+                f"{'n/a' if s.atm_iv_near is None else f'{s.atm_iv_near:.1%}'}"
+            )
+        if self.last_policy is not None:
+            parts.append(self.last_policy.describe())
+        if self.last_arbitration:
+            parts.append(f"arbitration: {self.last_arbitration}")
+        if self.last_error:
+            parts.append(f"warning: {self.last_error}")
+        return "\n".join(parts)
+
+    def strategies_text(self) -> str:
+        if not self.last_evaluations:
+            return "No strategy evaluation yet (runs on each completed 5-minute bar in session)."
+        return "\n".join(e.summary() for e in self.last_evaluations)[:3900]
+
+    def positions_text(self) -> str:
+        positions = self.book.open_positions()
+        if not positions:
+            return "No open engine positions."
+        out = []
+        for p in positions:
+            legs = ", ".join(f"{leg.side} {leg.tradingsymbol}@{leg.entry_price}" for leg in p.legs)
+            out.append(
+                f"[{p.mode.upper()}] {p.id} {p.strategy_id} x{p.lots} {p.status} | "
+                f"P&L Rs{p.meta.get('last_pnl', 'n/a')} | max loss Rs{p.max_loss:,.0f}\n  {legs}"
+            )
+        return "\n".join(out)
+
+    def pnl_text(self) -> str:
+        today = self.clock().astimezone(IST).date()
+        lines = []
+        for mode in ("paper", "live"):
+            closed = self.book.closed_positions(mode=mode)
+            if not closed and not self.book.open_positions(mode):
+                continue
+            day = sum(
+                (
+                    p.realized_pnl or 0
+                    for p in closed
+                    if (p.closed_at or "")[:10] == today.isoformat()
+                ),
+                Decimal(0),
+            )
+            total = sum((p.realized_pnl or 0 for p in closed), Decimal(0))
+            wins = sum(1 for p in closed if (p.realized_pnl or 0) > 0)
+            gross_win = sum(
+                (p.realized_pnl for p in closed if (p.realized_pnl or 0) > 0), Decimal(0)
+            )
+            gross_loss = -sum(
+                (p.realized_pnl for p in closed if (p.realized_pnl or 0) < 0), Decimal(0)
+            )
+            pf = f"{gross_win / gross_loss:.2f}" if gross_loss else "n/a"
+            lines.append(
+                f"[{mode.upper()}] today Rs{day:,.2f} | all-time Rs{total:,.2f} over "
+                f"{len(closed)} trades, win rate {wins / len(closed):.0%}, PF {pf}"
+                if closed
+                else f"[{mode.upper()}] no closed trades yet"
+            )
+        return "\n".join(lines) or "No engine trades yet."
+
+    def capital_text(self) -> str:
+        now = self.clock()
+        lines = []
+        for mode in ("paper", "live") if self.live is not None else ("paper",):
+            try:
+                snap, policy = self.portfolio(mode, now)
+            except Exception as exc:
+                lines.append(f"[{mode.upper()}] UNAVAILABLE: {exc}")
+                continue
+            lines.append(
+                f"[{mode.upper()}] equity Rs{snap.net_liquidation_equity:,.2f} (start of day "
+                f"Rs{snap.start_of_day_equity:,.2f}, peak Rs{snap.peak_equity:,.2f}); open risk "
+                f"Rs{snap.open_max_loss:,.0f}; margin room Rs{snap.available_margin:,.0f}\n  "
+                f"{policy.describe()}"
+            )
+        return "\n".join(lines)

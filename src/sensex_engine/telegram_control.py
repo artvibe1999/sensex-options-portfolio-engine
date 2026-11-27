@@ -15,6 +15,10 @@ class OperationsController:
     startup_recovery_complete: bool = False
     emergency_close_all: Any | None = None
     emergency_active: bool = False
+    # Strategy engine (optional). When attached, paper entries are controlled by
+    # /pause and /resume independently of the live readiness gates.
+    engine: Any | None = None
+    readiness_reason: Any | None = None
 
     def handle(
         self,
@@ -34,16 +38,21 @@ class OperationsController:
             )
         if normalized == "/status":
             pending = self.mode.live_requested_by is not None
-            return (
-                f"mode={self.mode.mode.value}; paused={self.paused}; "
+            text = (
+                f"mode={self.mode.mode.value}; live_gates_paused={self.paused}; "
                 f"live_confirmation_pending={pending}; "
                 f"startup_recovery_complete={self.startup_recovery_complete}"
             )
+            if self.engine is not None:
+                text += "\n" + self.engine.status_text()
+            return text
         if normalized == "/help":
             return (
                 "Commands: /status /paper /live /confirm_live /pause /resume /positions /orders "
-                "/pnl /capital /risk /strategies /closeall /emergency. "
-                "Emergency close-all immediately halts entries and forces paper mode."
+                "/pnl /capital /risk /strategies /close <id> confirm /closeall /emergency. "
+                "PAPER is the default on every start. LIVE needs /resume (all readiness gates), "
+                "then /live and a separate /confirm_live. Emergency close-all immediately "
+                "halts entries and forces paper mode."
             )
         if normalized == "/paper":
             self.mode.force_paper()
@@ -69,7 +78,22 @@ class OperationsController:
             return "Live mode activated after confirmation and readiness checks."
         if normalized == "/pause":
             self.paused = True
-            return "New entries paused."
+            if self.engine is not None:
+                self.engine.user_paused = True
+            return "New entries paused (paper and live). Open positions are still managed."
+        if normalized == "/resume" and self.engine is not None:
+            self.engine.user_paused = False
+            if self.startup_recovery_complete and broker_ready and risk_clear:
+                self.paused = False
+                return "Paper entries resumed. Live readiness gates passed; /live may be requested."
+            reason = ""
+            if self.readiness_reason is not None:
+                try:
+                    reason = f" ({self.readiness_reason()})"
+                except Exception:
+                    reason = ""
+            return ("Paper entries resumed. Live gates remain closed: startup recovery, broker "
+                    f"readiness or risk checks did not pass{reason}.")
         if normalized == "/resume":
             if not self.startup_recovery_complete:
                 raise RuntimeError("Cannot resume: startup recovery has not completed")
@@ -77,6 +101,19 @@ class OperationsController:
                 raise RuntimeError("Cannot resume: broker readiness or risk checks failed")
             self.paused = False
             return "Entries resumed after readiness checks."
+        if normalized == "/positions" and self.engine is not None:
+            return self.engine.positions_text()
+        if normalized in {"/pnl", "/capital", "/risk"} and self.engine is not None:
+            if normalized == "/pnl":
+                return self.engine.pnl_text()
+            return self.engine.capital_text()
+        if normalized == "/strategies" and self.engine is not None:
+            return self.engine.strategies_text()
+        if normalized == "/close" and self.engine is not None:
+            parts = command.split()
+            if len(parts) != 3 or parts[2].lower() != "confirm":
+                return "Usage: /close <position_id> confirm  (see /positions for ids)"
+            return self.engine.close_one(parts[1], user_id=user_id)
         if normalized in {"/positions", "/orders"}:
             if self.portfolio_queries is None:
                 raise NotImplementedError(

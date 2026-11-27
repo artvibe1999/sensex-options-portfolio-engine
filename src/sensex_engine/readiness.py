@@ -60,6 +60,7 @@ class LiveReadinessService:
         self.reconciliation_service = reconciliation_service or BrokerReconciliationService()
         self.max_contract_age_seconds = max_contract_age_seconds
         self.max_market_data_age_seconds = max_market_data_age_seconds
+        self.last_reasons: tuple[str, ...] = ()
 
     @staticmethod
     def _fresh(timestamp: datetime, *, now: datetime, max_age: int) -> bool:
@@ -146,6 +147,9 @@ class LiveReadinessService:
     def __call__(self) -> tuple[bool, bool]:
         """Compatibility with Telegram ReadinessProvider; failures always deny."""
         try:
-            return self.evaluate().telegram_flags()
-        except Exception:
+            result = self.evaluate()
+            self.last_reasons = result.reasons
+            return result.telegram_flags()
+        except Exception as exc:
+            self.last_reasons = (f"Readiness evaluation failed: {type(exc).__name__}",)
             return False, False

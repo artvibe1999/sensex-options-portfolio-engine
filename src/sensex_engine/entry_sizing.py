@@ -68,6 +68,7 @@ class EntrySizingService:
             snapshot.net_liquidation_equity, peak_equity=snapshot.peak_equity,
             base_risk_pct=min(limits.risk_per_trade_pct, limits.max_strategy_risk_pct),
             base_aggregate_pct=limits.max_aggregate_open_risk_pct,
+            band_scale=limits.drawdown_band_scale,
         )
         if not budget.new_entries_allowed:
             raise ValueError(budget.reason)

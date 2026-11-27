@@ -26,6 +26,24 @@ class Settings(BaseSettings):
     bfo_sensex_freeze_quantity: int = Field(1000, ge=1)
     max_margin_utilization_pct: float = Field(0.70, gt=0, le=1)
 
+    # --- Strategy engine runtime -------------------------------------------------
+    # Read-only path to the daily Kite token written by the primary bot (shared Kite
+    # app). This process never performs the Kite login itself.
+    kite_token_file: str = ""
+    engine_db_path: str = "./data/engine.db"
+    engine_cycle_seconds: int = Field(30, ge=10, le=120)
+    heartbeat_path: str = "./data/heartbeat"
+    # 0 = initialise paper capital from Kite start-of-day funds on first run.
+    paper_start_capital: float = Field(0, ge=0)
+    # Uniform multiplier (<=1) applied to every capital-tier risk percentage.
+    risk_scale: float = Field(1.0, gt=0, le=1)
+    # Comma-separated strategy ids to enable; empty = all eight families.
+    enabled_strategies: str = ""
+    min_strategy_score: float = Field(55, ge=0, le=100)
+    square_off_time: str = "15:10"
+    # strict = any unmanaged SENSEX exposure blocks; managed = shared-account scope.
+    reconcile_scope: Literal["strict", "managed"] = "strict"
+
     # Environment configuration can never silently boot the process into live mode.
     trading_mode: Literal["paper", "live"] = "paper"
 

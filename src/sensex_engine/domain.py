@@ -17,6 +17,7 @@ class Regime(StrEnum):
     BEAR_TREND = "bear_trend"
     RANGE = "range"
     VOLATILITY_EXPANSION = "volatility_expansion"
+    VOLATILITY_COMPRESSION = "volatility_compression"
     TRANSITION = "transition"
     UNKNOWN = "unknown"
 
