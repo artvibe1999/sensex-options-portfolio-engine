@@ -247,3 +247,51 @@ def test_emergency_limit_prices_use_fresh_executable_side_and_tick_rounding():
     sell = SimpleNamespace(instrument_token=1001, tradingsymbol="SENSEX26DEC80000CE", side="SELL")
     assert price(buy) == Decimal("100.05")
     assert price(sell) == Decimal("99.95")
+
+
+
+def test_position_lifecycle_only_finalizes_a_flat_position(tmp_path):
+    store = SqliteStore(tmp_path / "flat-finalize.sqlite3")
+    positions = PositionLifecycle(store)
+    positions.create(
+        position_id="flat-position",
+        strategy_id="test",
+        mode="live",
+        legs=[{
+            "leg_index": 0, "instrument_token": 1001,
+            "tradingsymbol": "SENSEX26DEC80000CE", "side": "BUY", "quantity": 20,
+        }],
+        idempotency_key="flat-position-create",
+    )
+    assert positions.finalize_flat(
+        position_id="flat-position", update_id="emergency-flat"
+    )
+    snapshot = positions.snapshot("flat-position")
+    assert snapshot["status"] == "CLOSED"
+    assert snapshot["is_fully_closed"]
+
+
+def test_position_lifecycle_rejects_flat_finalization_with_open_exposure(tmp_path):
+    store = SqliteStore(tmp_path / "not-flat.sqlite3")
+    positions = PositionLifecycle(store)
+    positions.create(
+        position_id="not-flat-position",
+        strategy_id="test",
+        mode="live",
+        legs=[{
+            "leg_index": 0, "instrument_token": 1001,
+            "tradingsymbol": "SENSEX26DEC80000CE", "side": "BUY", "quantity": 20,
+        }],
+        idempotency_key="not-flat-position-create",
+    )
+    positions.record_leg_fill(
+        position_id="not-flat-position", leg_index=0, phase="OPEN",
+        fill_id="open-fill", quantity=20, price=Decimal("100"),
+        filled_at=datetime.now(UTC).isoformat(),
+    )
+    import pytest
+
+    with pytest.raises(ValueError, match="residual exposure"):
+        positions.finalize_flat(
+            position_id="not-flat-position", update_id="emergency-flat"
+        )
