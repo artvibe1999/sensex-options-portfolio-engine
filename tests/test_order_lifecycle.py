@@ -270,6 +270,8 @@ def test_late_broker_fill_after_cancel_ack_is_recorded_safely(tmp_path):
     assert snapshot["state"] == "PARTIALLY_FILLED"
     assert snapshot["filled_quantity"] == 8
     assert snapshot["remaining_quantity"] == 12
+    assert snapshot["cancel_confirmed"] is True
+    assert ledger.active_snapshots() == []
 
 
 def test_late_fill_after_cancel_can_complete_but_never_overfill(tmp_path):
