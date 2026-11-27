@@ -27,6 +27,10 @@ class SqliteStore:
         connection = self._connect()
         try:
             yield connection
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
         finally:
             connection.close()
 
