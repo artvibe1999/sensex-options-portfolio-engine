@@ -90,3 +90,36 @@ def test_contract_refresh_drops_expired_or_removed_symbols():
     assert adapter.instruments() == []
     with pytest.raises(ValueError):
         adapter.quotes([987])
+
+
+def test_kite_adapter_parses_iso_quote_timestamp_and_naive_expiry_as_ist():
+    fake = FakeKite()
+    fake.rows[0]["expiry"] = datetime(2026, 12, 1)
+    original_quote = fake.quote
+
+    def quote(symbols):
+        payload = original_quote(symbols)
+        payload[symbols[0]]["timestamp"] = datetime.now(UTC).isoformat()
+        return payload
+
+    fake.quote = quote
+    adapter = KiteReadOnlyAdapter(fake)
+    contract = adapter.instruments()[0]
+    assert contract.expiry.tzinfo is not None
+    assert contract.expiry.utcoffset().total_seconds() == 19800
+    assert adapter.quotes([987])[987].timestamp.tzinfo is not None
+
+
+def test_kite_adapter_skips_malformed_quote_timestamps():
+    fake = FakeKite()
+    original_quote = fake.quote
+
+    def quote(symbols):
+        payload = original_quote(symbols)
+        payload[symbols[0]]["timestamp"] = "not-a-timestamp"
+        return payload
+
+    fake.quote = quote
+    adapter = KiteReadOnlyAdapter(fake)
+    adapter.instruments()
+    assert adapter.quotes([987]) == {}
