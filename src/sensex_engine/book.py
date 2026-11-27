@@ -361,6 +361,22 @@ class EngineBook:
                     (str(equity), mode, day.isoformat()),
                 )
 
+    def reset_equity_reference(self, mode: str, day: date, equity: Decimal) -> None:
+        """Start a fresh equity reference (operator capital reset).
+
+        Earlier daily rows only serve as peak/week/month references; they are removed so
+        drawdown is measured from the new capital. Today's entry count and halt flag are
+        kept. Closed trades (P&L history) are untouched.
+        """
+        with self._conn() as conn:
+            conn.execute("DELETE FROM eng_equity WHERE mode=? AND day<?", (mode, day.isoformat()))
+            conn.execute(
+                "INSERT INTO eng_equity(mode,day,start_equity,peak_equity) VALUES(?,?,?,?) "
+                "ON CONFLICT(mode,day) DO UPDATE SET start_equity=excluded.start_equity, "
+                "peak_equity=excluded.peak_equity",
+                (mode, day.isoformat(), str(equity), str(equity)),
+            )
+
     def set_halted(self, mode: str, day: date, halted: bool = True) -> None:
         with self._conn() as conn:
             conn.execute(

@@ -99,7 +99,9 @@ Calendars are paper-only in live mode, because multi-expiry live sizing is not i
 
 ## Telegram
 
-`/status /strategies /positions /pnl /capital /risk /pause /resume /paper /live /confirm_live /close <id> confirm /closeall /emergency`
+`/status /strategies /positions /pnl /capital /risk /pause /resume /paper /live /confirm_live /close <id> confirm /setcapital <amount> /closeall /emergency`
+
+`/setcapital 200000` (also `2.5L`, `50k`, `1cr`) sets current paper equity to that amount: paper base = amount − realised paper P&L, today's start-of-day/peak reset (older equity references removed so drawdown restarts), trade history kept. Refused while paper positions are open; ₹10k–₹10cr; live capital always comes from Kite funds.
 
 You get alerts for entries, exits, failures, daily stops, stale data, broker-monitor health and a 15:30 daily summary. Without a bot token, alerts go to the container log.
 

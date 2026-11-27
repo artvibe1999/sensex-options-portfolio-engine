@@ -283,3 +283,44 @@ def test_operator_close_refuses_stale_snapshot(tmp_path):
     with pytest.raises(RuntimeError, match="stale"):
         engine.close_all("paper", "operator")
     assert SPOT > 0
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("200000", "200000"), ("2,00,000", "200000"), ("Rs 50000", "50000"), ("50k", "50000"),
+    ("2.5L", "250000"), ("2.5 lakh", "250000"), ("1cr", "10000000"), ("₹75000", "75000"),
+    ("abc", None), ("-5", None), ("0", None), ("1e400", None),
+])
+def test_parse_amount(text, expected):
+    from sensex_engine.telegram_control import parse_amount
+
+    result = parse_amount(text)
+    assert (None if result is None else str(int(result))) == expected
+
+
+def test_setcapital_resets_paper_equity_and_policy(tmp_path):
+    fk = FakeKite(funds=50000)
+    engine, alerts = _engine(tmp_path, fk)
+    yesterday = (NOW - timedelta(days=1)).date()
+    engine.book.set_state("paper_base_capital", "50000")
+    engine.book.start_day("paper", yesterday, Decimal("60000"))  # old peak
+    engine.book.open_position(_position("old", yesterday.isoformat()))
+    engine.book.close_position("old", exit_prices={1: 0.0, 2: 70.0}, exit_costs=Decimal("10"),
+                               reason="x", closed_at=NOW - timedelta(days=1))
+    realised = engine.book.realized_total("paper")
+    ops = _ops(engine)
+    reply = ops.handle("/setcapital 2.5L", user_id=1, chat_id=2)
+    assert "Paper capital set to Rs 250,000.00" in reply and "Capital tier: small" in reply
+    assert Decimal(engine.book.get_state("paper_base_capital")) == Decimal("250000") - realised
+    engine.feed.refresh_contracts(NOW)
+    snap, policy = engine.portfolio("paper", NOW)
+    assert snap.net_liquidation_equity == Decimal("250000")
+    assert snap.peak_equity == Decimal("250000") and policy.drawdown_pct == 0
+    assert engine.book.closed_positions(mode="paper")  # history kept
+    assert any("Capital set" in a for a in alerts)
+    assert "Usage" in ops.handle("/setcapital", user_id=1, chat_id=2)
+    assert "Could not read" in ops.handle("/setcapital lots", user_id=1, chat_id=2)
+    assert "between" in ops.handle("/setcapital 500", user_id=1, chat_id=2)
+    engine.book.open_position(_position("open", NOW.date().isoformat()))
+    assert "Not changed" in ops.handle("/setcapital 100000", user_id=1, chat_id=2)
+    with pytest.raises(PermissionError):
+        ops.handle("/setcapital 100000", user_id=9, chat_id=2)

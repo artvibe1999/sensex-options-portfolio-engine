@@ -555,6 +555,42 @@ class Engine:
         )
         self.book.log_decision("exit", {"position": p.id, "reason": reason, "pnl": str(pnl)}, now)
 
+    MIN_PAPER_CAPITAL = Decimal("10000")
+    MAX_PAPER_CAPITAL = Decimal("100000000")
+
+    def set_paper_capital(self, amount: Decimal, *, user_id: int | None = None) -> str:
+        """Operator sets current paper equity to ``amount`` (paper only)."""
+        from .reports import policy_lines, rs
+
+        with self._lock:
+            if not self.MIN_PAPER_CAPITAL <= amount <= self.MAX_PAPER_CAPITAL:
+                return (f"Paper capital must be between {rs(self.MIN_PAPER_CAPITAL)} and "
+                        f"{rs(self.MAX_PAPER_CAPITAL)}.")
+            open_paper = self.book.open_positions("paper")
+            if open_paper:
+                return (f"Not changed: {len(open_paper)} paper position(s) are open. Close them "
+                        "(/positions, /close <id> confirm) or wait for the 15:10 square-off.")
+            now = self.clock()
+            today = now.astimezone(IST).date()
+            previous = self.book.get_state("paper_base_capital")
+            # equity = base + all realised paper P&L, so solve for the base.
+            base = amount - self.book.realized_total("paper")
+            self.book.set_state("paper_base_capital", str(base))
+            self.book.reset_equity_reference("paper", today, amount)
+            self.book.log_decision("paper_capital_set", {
+                "amount": str(amount), "previous_base": previous, "user": user_id}, now)
+            policy = self._policy(amount, amount)
+            self.last_policy = policy if self.mode == "paper" else self.last_policy
+            self.notifier.send(f"[PAPER] Capital set to {rs(amount, 2)} by operator.")
+            return "\n".join([
+                f"Paper capital set to {rs(amount, 2)}",
+                "Drawdown and daily-loss references restart from this amount; "
+                "trade history is kept.",
+                "",
+                "New risk policy",
+                *policy_lines(policy),
+            ])
+
     def close_all(self, mode: str, reason: str) -> int:
         """Operator-initiated controlled close (paper; live goes through emergency close-all)."""
         with self._lock:
