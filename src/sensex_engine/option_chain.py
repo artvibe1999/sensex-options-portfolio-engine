@@ -3,7 +3,7 @@
 Greeks and implied volatility are model estimates, not exchange-provided values.
 """
 from dataclasses import dataclass
-from datetime import date, datetime, time
+from datetime import datetime, time
 from decimal import Decimal
 from math import erf, exp, log, pi, sqrt
 from zoneinfo import ZoneInfo
@@ -57,7 +57,9 @@ def _pdf(value: float) -> float:
     return exp(-0.5 * value * value) / sqrt(2.0 * pi)
 
 
-def _price(spot: float, strike: float, years: float, rate: float, vol: float, right: Right) -> float:
+def _price(
+    spot: float, strike: float, years: float, rate: float, vol: float, right: Right
+) -> float:
     root_t = sqrt(years)
     d1 = (log(spot / strike) + (rate + 0.5 * vol * vol) * years) / (vol * root_t)
     d2 = d1 - vol * root_t
@@ -71,7 +73,11 @@ def _implied_volatility(
     premium: float, spot: float, strike: float, years: float, rate: float, right: Right
 ) -> float | None:
     discounted_strike = strike * exp(-rate * years)
-    intrinsic = max(spot - discounted_strike, 0.0) if right is Right.CE else max(discounted_strike - spot, 0.0)
+    intrinsic = (
+        max(spot - discounted_strike, 0.0)
+        if right is Right.CE
+        else max(discounted_strike - spot, 0.0)
+    )
     upper_bound = spot if right is Right.CE else discounted_strike
     if premium < intrinsic - 1e-7 or premium >= upper_bound or premium <= 0:
         return None
@@ -151,7 +157,9 @@ def build_option_chain(
 
     for contract in contracts:
         if contract.instrument_token in seen:
-            rejected.append(RejectedContract(contract.instrument_token, "Duplicate instrument token"))
+            rejected.append(
+                RejectedContract(contract.instrument_token, "Duplicate instrument token")
+            )
             continue
         seen.add(contract.instrument_token)
         quote = quotes.get(contract.instrument_token)
@@ -175,9 +183,15 @@ def build_option_chain(
             continue
         years = seconds / (365.0 * 24.0 * 60.0 * 60.0)
         mid = (quote.bid + quote.ask) / Decimal("2")
-        iv = _implied_volatility(float(mid), spot, float(contract.strike), years, rate, contract.right)
+        iv = _implied_volatility(
+            float(mid), spot, float(contract.strike), years, rate, contract.right
+        )
         if iv is None or not 0.0001 <= iv <= 5.0:
-            rejected.append(RejectedContract(contract.instrument_token, "Mid price has no valid implied volatility"))
+            rejected.append(
+                RejectedContract(
+                    contract.instrument_token, "Mid price has no valid implied volatility"
+                )
+            )
             continue
         delta, gamma, theta, vega, rho = _greeks(
             spot, float(contract.strike), years, rate, iv, contract.right
@@ -194,7 +208,11 @@ def build_option_chain(
             rho_per_one_percent=Decimal(str(rho)),
         ))
 
-    results.sort(key=lambda item: (item.contract.expiry, item.contract.strike, item.contract.right.value))
+    results.sort(
+        key=lambda item: (
+            item.contract.expiry, item.contract.strike, item.contract.right.value
+        )
+    )
     return OptionChainSnapshot(
         underlying_price=underlying_price,
         as_of=as_of,
