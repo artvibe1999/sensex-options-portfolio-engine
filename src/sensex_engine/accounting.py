@@ -5,8 +5,8 @@ marks. It never assumes the illustrative capital amount in the requirements docu
 """
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, timedelta
 import hashlib
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -15,6 +15,8 @@ from .domain import PortfolioSnapshot
 from .reconciliation import ReconciliationReport
 
 ACCOUNT_ID = "account:default"
+
+
 def _decimal(value: Any, field: str) -> Decimal:
     if isinstance(value, bool):
         raise ValueError(f"{field} must be a finite decimal amount")
