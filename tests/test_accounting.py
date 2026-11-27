@@ -1,0 +1,109 @@
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
+
+import pytest
+
+from sensex_engine.accounting import PortfolioAccountingService
+from sensex_engine.persistence import SqliteStore
+
+
+def make_account(tmp_path):
+    store = SqliteStore(tmp_path / "accounting.sqlite3")
+    return store, PortfolioAccountingService(store=store)
+
+
+def test_account_ledger_persists_cash_flows_and_separates_them_from_profit(tmp_path):
+    _, account = make_account(tmp_path)
+    now = datetime.now(UTC)
+    account.set_opening_equity(Decimal("100000"), idempotency_key="opening")
+    account.record_cash_flow(
+        Decimal("10000"), direction="DEPOSIT", idempotency_key="deposit",
+        occurred_at=now,
+    )
+    account.record_cash_flow(
+        Decimal("2000"), direction="WITHDRAWAL", idempotency_key="withdrawal",
+        occurred_at=now,
+    )
+    account.record_trade_result(
+        realized_pnl=Decimal("1000"), fees=Decimal("100"),
+        idempotency_key="trade-1", occurred_at=now,
+    )
+    account.record_reconciled_mark(
+        broker_net_equity=Decimal("108200"), unrealized_pnl=Decimal("-700"),
+        available_margin=Decimal("50000"), open_max_loss=Decimal("2500"),
+        open_positions=1, entries_today=1, reconciliation_id="recon-1",
+        broker_positions_hash="sha256:positions", marked_at=now,
+    )
+    snapshot = account.snapshot(now=now)
+    assert snapshot is not None
+    assert snapshot.net_liquidation_equity == Decimal("108200")
+    assert snapshot.daily_realized_pnl == Decimal("900")
+    assert snapshot.daily_unrealized_pnl == Decimal("-700")
+    assert snapshot.deposits_withdrawals_today == Decimal("8000")
+    report = account.report(now=now)
+    assert report is not None
+    assert report["realized_net_pnl"] == "900"
+    assert report["deposits"] == "10000"
+    assert report["withdrawals"] == "2000"
+
+
+def test_account_ledger_is_restart_safe_and_idempotent(tmp_path):
+    store, account = make_account(tmp_path)
+    account.set_opening_equity(Decimal("50000"), idempotency_key="opening")
+    assert account.set_opening_equity(Decimal("50000"), idempotency_key="opening") is False
+    with pytest.raises(ValueError, match="immutable"):
+        account.set_opening_equity(Decimal("60000"), idempotency_key="opening-2")
+    restored = PortfolioAccountingService(store=SqliteStore(store.database_path))
+    assert restored._events()[0]["payload"]["amount"] == "50000"
+
+
+def test_account_ledger_rejects_conflicting_idempotency_key(tmp_path):
+    _, account = make_account(tmp_path)
+    account.set_opening_equity(Decimal("50000"), idempotency_key="opening")
+    account.record_cash_flow(
+        Decimal("1000"), direction="DEPOSIT", idempotency_key="cash-1",
+    )
+    with pytest.raises(ValueError, match="idempotency key conflicts"):
+        account.record_cash_flow(
+            Decimal("2000"), direction="DEPOSIT", idempotency_key="cash-1",
+        )
+
+
+def test_snapshot_fails_closed_without_opening_or_fresh_reconciled_mark(tmp_path):
+    _, account = make_account(tmp_path)
+    now = datetime.now(UTC)
+    assert account.snapshot(now=now) is None
+    account.set_opening_equity(Decimal("50000"), idempotency_key="opening")
+    assert account.snapshot(now=now) is None
+    account.record_reconciled_mark(
+        broker_net_equity=Decimal("50000"), unrealized_pnl=Decimal("0"),
+        available_margin=Decimal("30000"), open_max_loss=Decimal("0"),
+        open_positions=0, entries_today=0, reconciliation_id="old",
+        broker_positions_hash="sha256:empty", marked_at=now - timedelta(minutes=5),
+    )
+    assert account.snapshot(now=now, max_mark_age=timedelta(minutes=2)) is None
+
+
+def test_snapshot_rejects_disagreement_with_broker_net_equity(tmp_path):
+    _, account = make_account(tmp_path)
+    now = datetime.now(UTC)
+    account.set_opening_equity(Decimal("50000"), idempotency_key="opening")
+    account.record_reconciled_mark(
+        broker_net_equity=Decimal("52000"), unrealized_pnl=Decimal("0"),
+        available_margin=Decimal("30000"), open_max_loss=Decimal("0"),
+        open_positions=0, entries_today=0, reconciliation_id="mismatch",
+        broker_positions_hash="sha256:empty", marked_at=now,
+    )
+    assert account.snapshot(now=now) is None
+
+
+def test_account_ledger_rejects_naive_timestamps_and_invalid_amounts(tmp_path):
+    _, account = make_account(tmp_path)
+    with pytest.raises(ValueError):
+        account.set_opening_equity(Decimal("NaN"), idempotency_key="opening")
+    account.set_opening_equity(Decimal("50000"), idempotency_key="opening")
+    with pytest.raises(ValueError, match="timezone-aware"):
+        account.record_cash_flow(
+            Decimal("10"), direction="DEPOSIT", idempotency_key="bad-time",
+            occurred_at=datetime(2026, 1, 1),
+        )
