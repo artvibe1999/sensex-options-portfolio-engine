@@ -306,6 +306,13 @@ class SqliteStore:
                         raise ValueError(
                             f"Invalid position transition: {status} -> {target}"
                         )
+                    if target == "CLOSED" and any(
+                        open_fills.get(index, 0) != close_fills.get(index, 0)
+                        for index in legs
+                    ):
+                        raise ValueError(
+                            "A position can be marked CLOSED only when every leg is flat"
+                        )
                 elif event_type == "POSITION_LEG_FILL_RECORDED":
                     if (
                         fill_phase not in {"OPEN", "CLOSE"}
