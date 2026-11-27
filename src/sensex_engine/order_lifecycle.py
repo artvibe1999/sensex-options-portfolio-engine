@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
 from enum import StrEnum
+from hashlib import sha256
 from threading import RLock
 from typing import Any
 
@@ -98,6 +99,7 @@ class OrderLifecycle:
         product: str,
         mode: str,
         idempotency_key: str,
+        client_order_key: str | None = None,
     ) -> bool:
         if not all(value.strip() for value in (
             order_id, position_id, tradingsymbol, side, order_type, product, mode,
@@ -110,6 +112,10 @@ class OrderLifecycle:
             raise ValueError("Order side must be BUY or SELL")
         if mode.lower() not in {"paper", "live"}:
             raise ValueError("Order mode must be paper or live")
+        if client_order_key is None:
+            client_order_key = "sx" + sha256(order_id.encode("utf-8")).hexdigest()[:22]
+        if not client_order_key.strip() or len(client_order_key) > 64:
+            raise ValueError("Client order key must contain 1 to 64 characters")
         with self._lock:
             existing = self.snapshot(order_id)
             if existing is not None:
@@ -129,6 +135,7 @@ class OrderLifecycle:
                     "order_type": order_type.upper(),
                     "product": product.upper(),
                     "mode": mode.lower(),
+                    "client_order_key": client_order_key,
                     "state": OrderState.CREATED.value,
                     "filled_quantity": 0,
                 },
