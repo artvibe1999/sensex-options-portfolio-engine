@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 from sensex_engine.persistence import SqliteStore
@@ -17,8 +17,11 @@ class FakeBroker:
         return []
 
 
-def make_service(tmp_path, *, contract_age=timedelta(seconds=0), market_age=timedelta(seconds=0), risk=True):
-    now = datetime.now(timezone.utc)
+def make_service(
+    tmp_path, *, contract_age=timedelta(seconds=0),
+    market_age=timedelta(seconds=0), risk=True,
+):
+    now = datetime.now(UTC)
     contract = SimpleNamespace(instrument_token=1, tradingsymbol="SENSEX80000CE", lot_size=1)
     lifecycle = PositionLifecycle(SqliteStore(tmp_path / "readiness.sqlite3"))
     return LiveReadinessService(
