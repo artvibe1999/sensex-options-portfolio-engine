@@ -56,7 +56,9 @@ class KiteOrderExecutionAdapter:
         existing = self.find_orders_by_client_key(client_order_key, expected_action=action)
         if existing:
             if len(existing) != 1:
-                raise RuntimeError("Client tag is ambiguous in Kite order book; manual recovery required")
+                raise RuntimeError(
+                    "Client tag is ambiguous in Kite order book; manual recovery required"
+                )
             row = self._find_order_row(tag)
             self._assert_order_matches(row, action=action, contract=contract, tag=tag)
             return existing[0]
@@ -102,10 +104,16 @@ class KiteOrderExecutionAdapter:
                 self._assert_order_matches(row, action=expected_action, contract=contract, tag=tag)
             else:
                 quantity = int(row.get("quantity") or 0)
-                if row.get("transaction_type") not in {"BUY", "SELL"} or quantity <= 0 or quantity % contract.lot_size:
+                if (
+                    row.get("transaction_type") not in {"BUY", "SELL"}
+                    or quantity <= 0
+                    or quantity % contract.lot_size
+                ):
                     raise ValueError("Client tag match has invalid side or lot quantity")
             status = self._map_status(row.get("status"))
-            receipts.append(BrokerOrderReceipt(order_id, status, str(row.get("status_message") or "")[:500]))
+            receipts.append(BrokerOrderReceipt(
+                order_id, status, str(row.get("status_message") or "")[:500]
+            ))
         return tuple(receipts)
 
     def cancel_order(
@@ -228,7 +236,9 @@ class KiteOrderExecutionAdapter:
             and int(row.get("quantity") or 0) == action.quantity
         )
         if not expected:
-            raise RuntimeError("Existing Kite tag maps to a different order; manual recovery required")
+            raise RuntimeError(
+                "Existing Kite tag maps to a different order; manual recovery required"
+            )
 
     @staticmethod
     def _map_status(value: object) -> BrokerOrderStatus:
@@ -256,7 +266,9 @@ class KiteOrderExecutionAdapter:
         except (InvalidOperation, TypeError, ValueError) as exc:
             raise ValueError("Limit price must be a valid decimal") from exc
         if not price.is_finite() or price <= 0 or price % tick_size != 0:
-            raise ValueError("Limit price must be positive and aligned to the current contract tick")
+            raise ValueError(
+                "Limit price must be positive and aligned to the current contract tick"
+            )
         return price
 
     @classmethod
