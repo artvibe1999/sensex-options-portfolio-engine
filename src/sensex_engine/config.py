@@ -1,7 +1,7 @@
 """Validated application configuration with a paper-only startup invariant."""
 from typing import Literal
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,8 +14,8 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_allowed_user_ids: str = ""
     telegram_allowed_chat_ids: str = ""
-    kite_api_key: str = ""
-    kite_access_token: str = ""
+    kite_api_key: SecretStr = Field(default=SecretStr(""), repr=False)
+    kite_access_token: SecretStr = Field(default=SecretStr(""), repr=False)
 
     # Environment configuration can never silently boot the process into live mode.
     trading_mode: Literal["paper", "live"] = "paper"
