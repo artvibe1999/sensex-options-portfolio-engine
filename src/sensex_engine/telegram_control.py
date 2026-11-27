@@ -85,9 +85,17 @@ class OperationsController:
             if normalized == "/positions":
                 return self.portfolio_queries.positions_text()
             return self.portfolio_queries.orders_text()
-        if normalized in {"/pnl", "/capital", "/risk", "/strategies"}:
+        if normalized in {"/pnl", "/capital", "/risk"}:
+            if self.portfolio_queries is None:
+                raise NotImplementedError("Account reporting services are not configured.")
+            if normalized == "/pnl":
+                return self.portfolio_queries.pnl_text()
+            if normalized == "/capital":
+                return self.portfolio_queries.capital_text()
+            return self.portfolio_queries.risk_text()
+        if normalized in {"/strategies"}:
             raise NotImplementedError(
-                "This query requires authoritative account, risk or strategy-runtime services."
+                "Strategy runtime reporting is not available until the strategy engine is implemented."
             )
         if normalized in {"/close", "/closeall", "/emergency"}:
             raise NotImplementedError(
