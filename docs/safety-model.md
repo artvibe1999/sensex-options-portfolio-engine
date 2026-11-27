@@ -21,3 +21,16 @@
 - Allow partial close orders only within independently confirmed remaining position exposure.
 - A broker acknowledgement is never a fill. Only independently ingested fill events update position exposure.
 - This is not a Kite event-stream integration; live execution remains disabled until adapter semantics, event delivery, reconciliation and failure recovery are validated.
+
+
+## Durable broker fill inbox
+
+Broker fill ingestion now uses a durable SQLite inbox. Each broker-order/trade identity
+and its normalized payload are committed before order/position projections are changed.
+Conflicting payload reuse is rejected. Receipts move through RECEIVED, PROCESSING and
+PROCESSED states; processing claims use a bounded lease so an abandoned PROCESSING
+receipt can be reclaimed after a crash. Failed projections return the receipt to
+RECEIVED. The order ledger remains the first fill fact and the position projection
+is replayed idempotently, allowing recovery after interruption between the two writes.
+This inbox is not a broker event transport: a future Kite adapter must still provide
+reliable event acquisition, reconnect/backfill, and reconciliation for missed events.
