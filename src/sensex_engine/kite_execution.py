@@ -91,7 +91,11 @@ class KiteOrderExecutionAdapter:
             raise ValueError("Kite order book response must be a list")
         matches = [row for row in rows if isinstance(row, dict) and row.get("tag") == tag]
         receipts: list[BrokerOrderReceipt] = []
-        contracts = self._market_data.instruments() if matches else []
+        if matches:
+            self._throttle_order_call()
+            contracts = self._market_data.instruments()
+        else:
+            contracts = []
         for row in matches:
             order_id = row.get("order_id")
             if not isinstance(order_id, str) or not order_id.strip():
@@ -169,12 +173,14 @@ class KiteOrderExecutionAdapter:
         )
 
     def _require_authenticated(self) -> None:
+        self._throttle_order_call()
         if not self._market_data.is_authenticated():
             raise PermissionError("Kite authentication is unavailable; order action refused")
 
     def _current_contract(self, action: LegExecutionAction):
         if action.instrument_token <= 0 or not action.tradingsymbol.strip():
             raise ValueError("A valid SENSEX contract identity is required")
+        self._throttle_order_call()
         contracts = self._market_data.instruments()
         matches = [
             item for item in contracts
@@ -201,6 +207,7 @@ class KiteOrderExecutionAdapter:
         if row.get("exchange") != "BFO":
             raise ValueError("Refusing to modify/cancel a non-BFO order")
         symbol = row.get("tradingsymbol")
+        self._throttle_order_call()
         contracts = self._market_data.instruments()
         contract_matches = [item for item in contracts if item.tradingsymbol == symbol]
         if len(contract_matches) != 1:
