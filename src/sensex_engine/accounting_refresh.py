@@ -9,6 +9,7 @@ import json
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
+from threading import Lock
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -56,6 +57,7 @@ class LiveAccountingRefresh:
         self.positions = positions
         self.orders = orders
         self.feed = feed
+        self._lock = Lock()
 
     def refresh(self, *, now: datetime | None = None) -> PortfolioSnapshot:
         now = now or datetime.now(UTC)
@@ -165,8 +167,9 @@ class LiveAccountingRefresh:
         return snapshot
 
     def snapshot(self) -> PortfolioSnapshot | None:
-        try:
-            return self.refresh()
-        except Exception:
-            self.account.invalidate_mark()
-            return None
+        with self._lock:
+            try:
+                return self.refresh()
+            except Exception:
+                self.account.invalidate_mark()
+                return None
