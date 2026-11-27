@@ -219,7 +219,7 @@ def test_close_partial_fill_is_cancelled_and_replaced_only_after_confirmation(tm
             {"fills": [(20, "100.00")]},
             {"fills": [(20, "101.00")]},
             {"fills": [(10, "99.00")]},
-            {"fills": [(20, "98.00")]},
+            {"fills": [(10, "98.00")]},
             {"fills": [(20, "97.00")]},
         ],
     )
