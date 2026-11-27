@@ -68,12 +68,11 @@ def generate_directional_verticals(
     lots: int,
     costs_per_lot: Decimal = Decimal("0"),
 ) -> tuple[StrategyCandidate, ...]:
-    """Create conservative directional debit-spread candidates, never orders.
+    """Create candidate-only directional debit and protected credit verticals.
 
-    Bull trend -> bull call debit spread; bear trend -> bear put debit spread.
-    Range/transition/volatility-expansion/unknown regimes produce no candidate.
-    The long leg is the closest available strike to spot; the short leg is the
-    nearest strictly OTM strike with matching expiry/right/lot size.
+    Bull trend -> bull call debit and bull put credit. Bear trend -> bear put
+    debit and bear call credit. Range/transition/volatility-expansion/unknown
+    regimes produce no candidates. All strikes are current listed contracts.
     """
     if lots <= 0 or regime not in {Regime.BULL_TREND, Regime.BEAR_TREND}:
         return ()
@@ -81,62 +80,106 @@ def generate_directional_verticals(
     for item in chain.analytics:
         by_expiry.setdefault(item.contract.expiry, []).append(item)
     candidates: list[StrategyCandidate] = []
+
     for expiry_items in by_expiry.values():
         if regime is Regime.BULL_TREND:
             calls = sorted(
                 (x for x in expiry_items if x.contract.right.value == "CE"),
                 key=lambda x: x.contract.strike,
             )
-            atm = min(
-                calls,
-                key=lambda x: abs(x.contract.strike - chain.underlying_price),
-                default=None,
-            )
-            if atm is None:
-                continue
-            short = next((x for x in calls if x.contract.strike > atm.contract.strike), None)
-            if short is None or short.contract.strike <= atm.contract.strike:
-                continue
-            candidate = _vertical(
-                strategy_id="SENSEX_BULL_CALL_DEBIT",
-                regime=regime,
-                long_leg=atm,
-                short_leg=short,
-                lots=lots,
-                costs_per_lot=costs_per_lot,
-                rationale=(
-                    "Bull-trend regime; defined-risk call debit vertical "
-                    "using current listed strikes"
+            if calls:
+                atm = min(
+                    calls,
+                    key=lambda x: abs(x.contract.strike - chain.underlying_price),
+                )
+                short_call = next(
+                    (x for x in calls if x.contract.strike > atm.contract.strike),
+                    None,
+                )
+                if short_call is not None:
+                    candidate = _vertical(
+                        strategy_id="SENSEX_BULL_CALL_DEBIT",
+                        regime=regime,
+                        long_leg=atm,
+                        short_leg=short_call,
+                        lots=lots,
+                        costs_per_lot=costs_per_lot,
+                        rationale="Bull-trend; defined-risk call debit vertical",
+                    )
+                    if candidate is not None:
+                        candidates.append(candidate)
+
+            puts_below = sorted(
+                (
+                    x for x in expiry_items
+                    if x.contract.right.value == "PE"
+                    and x.contract.strike < chain.underlying_price
                 ),
+                key=lambda x: x.contract.strike,
+                reverse=True,
             )
+            if len(puts_below) >= 2:
+                short_put, long_put = puts_below[0], puts_below[1]
+                candidate = _vertical(
+                    strategy_id="SENSEX_BULL_PUT_CREDIT",
+                    regime=regime,
+                    long_leg=long_put,
+                    short_leg=short_put,
+                    lots=lots,
+                    costs_per_lot=costs_per_lot,
+                    rationale="Bull-trend; defined-risk put credit with protective lower-strike put",
+                )
+                if candidate is not None:
+                    candidates.append(candidate)
+
         else:
             puts = sorted(
                 (x for x in expiry_items if x.contract.right.value == "PE"),
                 key=lambda x: x.contract.strike,
                 reverse=True,
             )
-            atm = min(
-                puts,
-                key=lambda x: abs(x.contract.strike - chain.underlying_price),
-                default=None,
-            )
-            if atm is None:
-                continue
-            short = next((x for x in puts if x.contract.strike < atm.contract.strike), None)
-            if short is None or short.contract.strike >= atm.contract.strike:
-                continue
-            candidate = _vertical(
-                strategy_id="SENSEX_BEAR_PUT_DEBIT",
-                regime=regime,
-                long_leg=atm,
-                short_leg=short,
-                lots=lots,
-                costs_per_lot=costs_per_lot,
-                rationale=(
-                    "Bear-trend regime; defined-risk put debit vertical "
-                    "using current listed strikes"
+            if puts:
+                atm = min(
+                    puts,
+                    key=lambda x: abs(x.contract.strike - chain.underlying_price),
+                )
+                short_put = next(
+                    (x for x in puts if x.contract.strike < atm.contract.strike),
+                    None,
+                )
+                if short_put is not None:
+                    candidate = _vertical(
+                        strategy_id="SENSEX_BEAR_PUT_DEBIT",
+                        regime=regime,
+                        long_leg=atm,
+                        short_leg=short_put,
+                        lots=lots,
+                        costs_per_lot=costs_per_lot,
+                        rationale="Bear-trend; defined-risk put debit vertical",
+                    )
+                    if candidate is not None:
+                        candidates.append(candidate)
+
+            calls_above = sorted(
+                (
+                    x for x in expiry_items
+                    if x.contract.right.value == "CE"
+                    and x.contract.strike > chain.underlying_price
                 ),
+                key=lambda x: x.contract.strike,
             )
-        if candidate is not None:
-            candidates.append(candidate)
+            if len(calls_above) >= 2:
+                short_call, long_call = calls_above[0], calls_above[1]
+                candidate = _vertical(
+                    strategy_id="SENSEX_BEAR_CALL_CREDIT",
+                    regime=regime,
+                    long_leg=long_call,
+                    short_leg=short_call,
+                    lots=lots,
+                    costs_per_lot=costs_per_lot,
+                    rationale="Bear-trend; defined-risk call credit with protective higher-strike call",
+                )
+                if candidate is not None:
+                    candidates.append(candidate)
+
     return tuple(candidates)
