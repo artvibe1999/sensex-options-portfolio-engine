@@ -339,12 +339,12 @@ class EmergencyCloseAllService:
                 issues.append(f"Invalid broker quantity for {symbol or 'unknown contract'}")
                 continue
             if token is None:
-                if quantity:
-                    issues.append(f"Unmapped non-zero BFO broker position: {symbol or token_value}")
+                if quantity and symbol.startswith("SENSEX"):
+                    issues.append(f"Unmapped non-zero SENSEX broker position: {symbol or token_value}")
                 continue
             if token not in symbol_by_token:
-                if quantity:
-                    issues.append(f"Position token {token} is absent from current SENSEX master")
+                if quantity and symbol.startswith("SENSEX"):
+                    issues.append(f"SENSEX position token {token} is absent from current contract master")
                 continue
             actual[token] = actual.get(token, 0) + quantity
 
@@ -380,7 +380,14 @@ class EmergencyCloseAllService:
                         continue
                     exchange = str(row.get("exchange", "")).upper()
                     symbol = str(row.get("tradingsymbol", ""))
-                    if exchange != "BFO" or symbol not in token_by_symbol:
+                    if exchange != "BFO" or (
+                        symbol not in token_by_symbol and not symbol.startswith("SENSEX")
+                    ):
+                        continue
+                    if symbol not in token_by_symbol:
+                        issues.append(
+                            f"Unmapped SENSEX broker order {row.get('order_id', 'UNKNOWN')}"
+                        )
                         continue
                     state = str(row.get("status", "")).upper()
                     if state not in {"COMPLETE", "CANCELLED", "REJECTED", "EXPIRED"}:
