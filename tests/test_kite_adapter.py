@@ -38,6 +38,15 @@ class FakeKite:
     def profile(self):
         return {"user_id": "TEST"}
 
+    def margins(self, segment):
+        assert segment == "equity"
+        return {
+            "enabled": True,
+            "net": 100000,
+            "available": {"cash": 100000, "live_balance": 100000},
+            "utilised": {"debits": 0},
+        }
+
     def quote(self, symbols):
         return {
             symbols[0]: {
