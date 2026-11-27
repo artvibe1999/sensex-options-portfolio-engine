@@ -848,32 +848,39 @@ Passing software tests does not prove strategy profitability.
 
 ---
 
-## 18. Current implementation status and known gaps (2026-11-27)
+## 18. Current implementation status and known gaps (updated 2026-11-27)
 
-Implemented in the current feature branch at the time this document was added:
-- Python package foundation, settings, persistence and audit.
-- Paper-first startup and Telegram allowlist/confirmation boundary.
-- Read-only Kite market-data adapter and BFO contract/quote handling.
-- Option-chain quality checks and Black–Scholes IV/Greeks estimates.
-- EMA/ATR/ADX regime classifier.
-- Payoff validation and four directional vertical candidate types.
-- Read-only broker reconciliation for BFO positions/orders.
-- Foundational append-only order-intent/state/fill ledger with fill-ID idempotency, cumulative-fill checks, transition guards, weighted average fill price, and restart reconstruction. It is currently single-process and is not integrated with broker order placement; complete transactional multi-process lifecycle and position aggregation remain outstanding.
-- Ruff and pytest CI.
+The feature branch now contains substantially more than the initial foundation. Status below reflects code present and tested; a foundation or planning primitive is not described as a complete live service.
 
-Not yet implemented / not live-ready:
-- Complete durable order/position lifecycle and fill ledger.
-- Broker order-placement adapter and robust multi-leg state machine.
-- Partial-fill recovery and emergency close-all.
-- Reconciliation fully wired into a production live-readiness provider.
-- Full Telegram positions, orders, P&L, capital, risk, strategies, close and emergency services.
-- Iron condor, iron butterfly, calendar/diagonal, and long-volatility candidate engines.
-- Multi-expiry scenario engine and comprehensive portfolio Greek stress.
-- Session/expiry/overnight policy enforcement across all strategies.
-- Formal live-readiness runbook and operational drills.
+Implemented and covered by automated tests:
+- Python package, typed settings, SQLite persistence, append-only command audit and paper-first startup.
+- Telegram user/chat allowlisting, separate live request/confirmation boundary, idempotent update handling, and fail-safe audit finalization.
+- Read-only Kite BFO instrument, quote, position, order and per-order trade-history access.
+- Contract/option-chain validation, data-quality checks, IV/Greeks estimates, EMA/ATR/ADX regime foundation and four directional vertical candidate generators.
+- Expiry payoff validation and foundational risk/capital sizing controls.
+- Durable order lifecycle, broker-order-ID integrity, idempotent partial/late fills, multi-leg position lifecycle and fill-to-position projection recovery.
+- Durable broker-fill inbox, processing leases and stale-worker fencing.
+- Read-only broker reconciliation against persisted positions and unresolved live orders.
+- Deterministic protective-leg execution planning, paper-only sequential execution coordinator, and durable broker-agnostic submission/recovery boundary. The submission boundary is not wired to Kite and live submission remains disabled.
+- Ordered Kite startup recovery, including pending-receipt replay, current-session trade-history backfill and broker reconciliation, now invoked before Telegram polling when credentials are configured.
+- Read-only Telegram positions/orders views, Ruff and pytest CI.
 
-Until these gaps are implemented and verified, the product is a development/paper foundation, not a deployable live trading system. The current default Telegram entry point must remain fail-closed.
+Partially implemented or not yet complete against this specification:
+- Kite event/postback or supervised recurring fill acquisition, reconnect handling, periodic reconciliation and missed-event recovery.
+- Actual Kite order-placement adapter, verified client-reference lookup semantics and end-to-end broker execution.
+- Durable fill-confirmed multi-leg live orchestration, including partial-fill/reject/timeout handling, cancel/replace and residual-exposure management.
+- Full live-readiness dependency wiring for fresh market data, contract master, broker health, persistence and portfolio risk; Telegram resume/live confirmation remain fail-closed without it.
+- Managed emergency close-all with verified broker fills and final reconciliation.
+- Full authoritative Telegram P&L, capital, risk and strategy reporting, plus safe managed position controls.
+- Iron condor, iron butterfly, calendar/diagonal and defined-debit long-volatility candidate engines.
+- Complete portfolio Greeks/stress scenarios, multi-expiry modelling, strategy arbitration and correlation controls.
+- Complete exchange-calendar, session, expiry, overnight and event-policy enforcement.
+- Kite access-token generation/renewal and secure session lifecycle.
+- Structured production monitoring, alerting, runbooks, encrypted backup/restore drills, security review and end-to-end paper validation across all strategy families/regimes.
 
+The environment-backed Telegram entrypoint attempts read-only Kite startup recovery before polling when both Kite credentials are configured. Missing credentials or any recovery failure keep the startup gate closed. Credentials use masked secret settings and are unwrapped only at the adapter boundary. This startup check is not full live readiness and does not enable order placement.
+
+The branch remains a development/paper foundation. It is not ready for live production deployment. No live trading, deployment, broker credential change or repository merge is authorized by this status update.
 ---
 
 ## 19. Configuration and governance
