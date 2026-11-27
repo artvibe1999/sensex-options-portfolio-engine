@@ -144,6 +144,17 @@ class OrderLifecycle:
         if not order_id.strip() or not update_id.strip():
             raise ValueError("Order and update identities are required")
         with self._lock:
+            event_key = f"order-update:{order_id}:{update_id}"
+            prior = next(
+                (event for event in self.store.events_for(order_id)
+                 if event["idempotency_key"] == event_key),
+                None,
+            )
+            if prior is not None:
+                payload = prior["payload"]
+                if payload["state"] != new_state.value:
+                    raise ValueError("Order update idempotency key conflicts with existing update")
+                return False
             current = self.snapshot(order_id)
             if current is None:
                 raise ValueError("Unknown order intent")
@@ -161,7 +172,7 @@ class OrderLifecycle:
             if broker_order_id:
                 payload["broker_order_id"] = broker_order_id
             return self.store.append_event(
-                idempotency_key=f"order-update:{order_id}:{update_id}",
+                idempotency_key=event_key,
                 event_type="ORDER_STATE_CHANGED",
                 aggregate_id=order_id,
                 payload=payload,
@@ -188,6 +199,24 @@ class OrderLifecycle:
             current = self.snapshot(order_id)
             if current is None:
                 raise ValueError("Unknown order intent")
+            key = f"broker-fill:{order_id}:{fill_id}"
+            prior = next(
+                (event for event in self.store.events_for(order_id)
+                 if event["idempotency_key"] == key),
+                None,
+            )
+            if prior is not None:
+                old_fill = prior["payload"]
+                same_fill = (
+                    old_fill["order_id"] == order_id
+                    and old_fill["fill_id"] == fill_id
+                    and int(old_fill["quantity"]) == quantity
+                    and Decimal(old_fill["price"]) == fill_price
+                    and old_fill["filled_at"] == filled_at
+                )
+                if not same_fill:
+                    raise ValueError("Fill idempotency key conflicts with existing fill")
+                return False
             state = OrderState(current["state"])
             if state in _TERMINAL:
                 raise ValueError("Cannot add a fill to a terminal order")
@@ -207,21 +236,12 @@ class OrderLifecycle:
                 "cumulative_filled_quantity": total,
                 "state": new_state.value,
             }
-            key = f"broker-fill:{fill_id}"
             created = self.store.append_event(
                 idempotency_key=key,
                 event_type="ORDER_FILL_RECORDED",
                 aggregate_id=order_id,
                 payload=payload,
             )
-            if not created:
-                prior = next(
-                    (event for event in self.store.events_for(order_id)
-                     if event["idempotency_key"] == key),
-                    None,
-                )
-                if prior is None or prior["payload"] != payload:
-                    raise ValueError("Fill idempotency key conflicts with existing fill")
             return created
 
     def snapshot(self, order_id: str) -> dict[str, Any] | None:
