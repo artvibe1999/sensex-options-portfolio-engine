@@ -1,8 +1,8 @@
 """Durable, broker-agnostic order-intent and fill lifecycle.
 
 This module records lifecycle facts only. It deliberately does not submit broker orders.
-The current process is single-writer; multi-process execution requires database-level
-transactional transition guards before it can be enabled.
+State transitions and fill-capacity checks are serialized with SQLite BEGIN IMMEDIATE
+transactions across store instances; broker execution still requires a separate recovery design.
 """
 from __future__ import annotations
 
