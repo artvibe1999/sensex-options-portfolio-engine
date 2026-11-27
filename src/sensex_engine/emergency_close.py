@@ -98,6 +98,7 @@ class EmergencyCloseAllService:
         # The halt is the first state change, before any broker or storage call.
         self._operations.paused = True
         self._operations.mode.force_paper()
+        self._operations.emergency_active = True
         run_id = str(uuid4())
         if not self._lock.acquire(blocking=False):
             return EmergencyCloseReport(
@@ -143,6 +144,7 @@ class EmergencyCloseAllService:
         finally:
             self._operations.paused = True
             self._operations.mode.force_paper()
+            self._operations.emergency_active = False
             self._lock.release()
 
     def _execute_halted(self, run_id: str) -> EmergencyCloseReport:
