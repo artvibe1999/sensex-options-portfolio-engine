@@ -70,7 +70,10 @@ class KitePortfolioRiskReadiness:
             max_utilization = Decimal(str(
                 getattr(self._settings, "max_margin_utilization_pct", 0.70)
             ))
-            if not max_utilization.is_finite() or not Decimal("0") < max_utilization <= Decimal("1"):
+            if (
+                not max_utilization.is_finite()
+                or not Decimal("0") < max_utilization <= Decimal("1")
+            ):
                 raise ValueError("Configured margin utilization ceiling is invalid")
             if utilization > max_utilization:
                 raise ValueError("Broker margin utilization exceeds the configured ceiling")
@@ -108,7 +111,8 @@ class KitePortfolioRiskReadiness:
             monthly_stop = Decimal(str(getattr(
                 self._settings, "monthly_drawdown_stop_pct", 0.07
             )))
-            if portfolio.daily_realized_pnl + portfolio.daily_unrealized_pnl <= -equity * daily_stop:
+            daily_pnl = portfolio.daily_realized_pnl + portfolio.daily_unrealized_pnl
+            if daily_pnl <= -equity * daily_stop:
                 raise ValueError("Portfolio daily loss stop has been reached")
             if portfolio.weekly_drawdown_pct >= weekly_stop:
                 raise ValueError("Portfolio weekly drawdown stop has been reached")
