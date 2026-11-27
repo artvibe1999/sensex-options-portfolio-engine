@@ -2,7 +2,7 @@
 from dataclasses import dataclass
 from typing import Any
 
-from .domain import Contract, Position, Side
+from sensex_engine.domain import Contract, Position, Side
 
 
 ACTIVE_ORDER_STATUSES = frozenset({
