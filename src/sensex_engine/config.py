@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     # Must be explicitly confirmed after the Kite developer-console static-IP setup.
     kite_static_ip_confirmed: bool = False
     broker_account_statement_path: str = ""
+    # Operator must verify against the current BSE/broker single-order ceiling.
+    bfo_sensex_freeze_quantity: int = Field(1000, ge=1)
     max_margin_utilization_pct: float = Field(0.70, gt=0, le=1)
 
     # Environment configuration can never silently boot the process into live mode.
