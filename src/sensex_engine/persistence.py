@@ -235,7 +235,7 @@ class SqliteStore:
                         )
                 elif event_type == "POSITION_LEG_FILL_RECORDED":
                     if fill_phase not in {"OPEN", "CLOSE"} or leg_index not in legs or fill_quantity <= 0:
-                        raise ValueError("Invalid position leg fill")
+                        raise ValueError("Invalid position leg fill parameters")
                     if fill_phase == "OPEN" and status != "PENDING":
                         raise ValueError(
                             "Opening fills are accepted only while position is PENDING"
