@@ -27,7 +27,10 @@ class PortfolioQueryService:
         except Exception:
             return "Internal position ledger is unavailable. No broker-state claim can be made."
         if not snapshots:
-            return "Internal position ledger: no active positions recorded. This is not a broker reconciliation result."
+            return (
+                "Internal position ledger: no active positions recorded. "
+                "This is not a broker reconciliation result."
+            )
         lines = ["Internal position ledger (not broker-confirmed):"]
         for item in snapshots[: self.max_items]:
             lines.append(
@@ -55,7 +58,10 @@ class PortfolioQueryService:
             return "Internal order ledger is unavailable. No broker-state claim can be made."
         snapshots.sort(key=lambda item: str(item.get("order_id", "")), reverse=True)
         if not snapshots:
-            return "Internal order ledger: no order intents recorded. This is not a broker order-book result."
+            return (
+                "Internal order ledger: no order intents recorded. "
+                "This is not a broker order-book result."
+            )
         lines = ["Internal order ledger (not broker-confirmed):"]
         for item in snapshots[: self.max_items]:
             lines.append(
@@ -64,7 +70,8 @@ class PortfolioQueryService:
             )
             lines.append(
                 f"  filled={self._integer(item.get('filled_quantity'))}/"
-                f"{self._integer(item.get('quantity'))} remaining={self._integer(item.get('remaining_quantity'))} "
+                f"{self._integer(item.get('quantity'))} "
+                f"remaining={self._integer(item.get('remaining_quantity'))} "
                 f"avg_fill={self._safe(item.get('average_fill_price') or 'n/a')}"
             )
         if len(snapshots) > self.max_items:
