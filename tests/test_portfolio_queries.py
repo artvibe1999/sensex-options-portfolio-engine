@@ -1,7 +1,7 @@
 from sensex_engine.order_lifecycle import OrderLifecycle
 from sensex_engine.persistence import SqliteStore
-from sensex_engine.position_lifecycle import PositionLifecycle
 from sensex_engine.portfolio_queries import PortfolioQueryService
+from sensex_engine.position_lifecycle import PositionLifecycle
 
 
 def make_queries(tmp_path, *, max_items=12, max_message_chars=3500):
