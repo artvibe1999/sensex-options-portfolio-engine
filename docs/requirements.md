@@ -914,7 +914,7 @@ unless it is explicitly required by this document.
 | PE-03 | COMPLETE | **Durable live multi-leg execution and recovery.** Implemented in `live_execution.py`: immutable durable LIMIT intents, fill-ledger gating, one-shot broker submission/recovery, confirmed cancel-before-replace, partial/reject/timeout handling, cancel/fill race recovery, short-first residual cleanup, unresolved-opening-order close protection and explicit blocked exposure reporting. The coordinator/submission flags remain disabled for normal strategy entry; PE-05 explicitly enables them only inside the Telegram emergency CLOSE service. The coordinator is never invoked with OPEN by this runtime path. |
 | PE-04 | COMPLETE | **Complete live-readiness wiring.** Telegram runtime constructs and injects authenticated Kite read-only and order adapters, current BFO contract master, paired CE/PE quotes (2-second freshness, depth/volume/spread/skew checks), SQLite quick-check, durable position/order lifecycles, broker reconciliation, live account funds/margin checks, adaptive portfolio-risk gate and explicit Kite static-IP confirmation. Both /resume and /confirm_live evaluate every gate. Missing dependencies deny readiness. The portfolio risk gate requires authoritative PE-06 equity/drawdown snapshots and therefore intentionally remains false until PE-06 is complete; no risk values are fabricated and normal live entries remain disabled. PE-05 is a separate close-only emergency exception. |
 | PE-05 | COMPLETE | **Managed emergency close-all.** /closeall and /emergency immediately pause entries and force PAPER mode; recover and cancel correlated pending OPEN orders, verify broker cancellation and racing fills, reconcile broker/local SENSEX net exposure, resume only durable VALIDATED CLOSE intents, close every managed LIVE position through PE-03 (short legs first, then protective longs), require per-leg individual trade fills, permit bounded replacements only after terminal/cancel-confirmed state, and perform final broker-position/order-book/fill-projection reconciliation. Uncorrelated manual SENSEX exposure/orders, stale quotes, missing static-IP confirmation, unknown orders, and broker/local mismatches block automatic closure and are reported as residuals. Emergency operation remains halted in PAPER mode; no auto-resume. |
-| PE-06 | PARTIAL | **Complete equity and portfolio risk accounting.** Added a durable append-only account ledger with atomic idempotency, immutable explicit opening equity, deposits/withdrawals separated from profit, fee-aware realised P&L, broker-reconciled equity marks, flow-adjusted peak/weekly/monthly drawdown projections, strategy-specific risk/allocation lot sizing, and fail-closed `/pnl`, `/capital`, `/risk` reports. The mark path now invokes the existing broker position/order reconciliation service and refuses mismatches or unresolved orders; live readiness reads the persisted fresh snapshot and remains blocked when it is absent/stale/inconsistent. Remaining: automatically ingest Kite trade fills, realised/unrealised P&L and actual charges; derive open max-loss from persisted filled strategy/payoff data rather than a supplied value; source broker net liquidation equity from an authoritative account balance feed (Kite margin is not treated as equity); calculate entry counts and open risk from actual ledgers; exercise the end-to-end runtime path and verify CI. Partial implementation head: `53734d3973fc6192d5376245b79be303594d31d3`. Ruff passed; pytest **247 passed**; **82% total statement coverage**. PR CI run: https://github.com/artvibe1999/sensex-options-portfolio-engine/actions/runs/46015071913 — passed. PE-06 remains PARTIAL because the automatic broker accounting/payoff-risk integration gates listed above are still outstanding. |
+| PE-06 | PARTIAL | **Complete equity and portfolio risk accounting.** Durable cash-flow-aware ledger, actual filled-unit payoff risk, independent statement intake, automatic realised/unrealised P&L reconstruction from durable live fills, final-charge mapping, separate Kite margin data, supervised refresh and fail-closed runtime readiness, current-equity whole-lot sizing, actual basket-margin and scaled-payoff risk approval, and immutable approved opening LIMIT prices. Paper positions are excluded from broker exposure. The six existing acceptance items are tracked below; actual broker statement/charge feed availability and final full-suite verification remain blocking. No production readiness is asserted. |
 | PE-07 | PARTIAL | **Portfolio Greeks and scenario stress.** Complete aggregate Greeks and multi-leg/multi-expiry stress calculations, including defined-risk verification and their use in candidate, sizing, monitoring and readiness gates. |
 | PE-08 | PARTIAL | **Strategy arbitration and correlation controls.** Complete candidate scoring/selection, portfolio interaction and correlation checks, concurrency limits, rejection diagnostics, and deterministic no-trade decisions. |
 | PE-09 | NOT STARTED | **Iron Condor candidate engine.** Implement the required regime, liquidity, IV/Greek, expiry, payoff, margin, risk and scenario gates; add tests for valid and rejected candidates. |
@@ -1015,3 +1015,58 @@ unless it is explicitly required by this document.
 - PositionLifecycle.finalize_flat supports positions with zero recorded exposure only through an explicit durable flat-finalization event. Generic status transitions cannot manually mark an open position CLOSED.
 - The emergency service is the only runtime caller of the PE-03 coordinator. It invokes CLOSE only; it never invokes OPEN or normal strategy entry. The durable submission/coordinator enable flags are explicitly enabled only within this close-only service.
 - PE-05 is a close-only safety path. It does not bypass PE-06 risk accounting for new live entries, auto-resume after emergency, deploy, or place any order during implementation.
+
+
+### PE-06 acceptance evidence and statement source
+
+The following are the same six outstanding items from PE-06, not additional
+requirements. The implementation uses Kite for verified fills, executable quotes,
+current contract metadata, basket margin and reconciliation. Kite's funds-and-margins
+`net` field is only available trading funds, not net liquidation equity. Its virtual
+contract note calculates charges but is not a final settled statement. See
+https://kite.trade/docs/connect/v3/user/#funds-and-margins and
+https://kite.trade/docs/connect/v3/margins/#virtual-contract-note.
+
+| Item | Code evidence | Acceptance status |
+|---|---|---|
+| PE-06.1 | `accounting_refresh.py` replays live durable opening/closing fills, calculates realised P&L and liquidation-quote unrealised P&L, validates and imports final per-fill charges without duplicate posting. | Implemented intake; actual final broker-charge source not provisioned. |
+| PE-06.2 | `StatementFeed` requires independent, fresh INR account equity and cash; reconstruction is cross-checked and margin remains separate. | Implemented source interface; authoritative source/exporter not provisioned or broker-verified. |
+| PE-06.3 | Supervised monitor refreshes after successful fill recovery, reconciliation and also on readiness evaluation. Failure invalidates the mark and blocks normal live entries. | Code implemented; final CI pending. |
+| PE-06.4 | `EntrySizingService` recomputes payoff from fresh executable prices, uses actual basket margin, sizes down to whole lots and invokes risk approval. Runtime coordinator requires sized entry approval and uses approved opening prices; close-only emergency path remains separate. | Code implemented for existing same-expiry candidates; final CI and actual strategy-runtime integration validation pending. |
+| PE-06.5 | Regression tests for realised P&L, actual filled quantity, replay, stale source, paper/live separation and scaled payoff/margin. | Automated tests added; complete acceptance not yet verified. |
+| PE-06.6 | Canonical register and CI evidence. | Remains open until full acceptance criteria pass. |
+
+#### Independent statement feed contract
+
+Configure `BROKER_ACCOUNT_STATEMENT_PATH` to a protected local file, atomically
+replaced by a trusted independently verified broker-account data process. Do not
+commit any account data or substitute margin/cash availability for equity. The
+application does not claim to retrieve a final ledger or account value directly
+from Kite when the API does not expose it. The file is a normalized interface,
+not a built-in Zerodha Console exporter. Example schema (illustrative only):
+
+```json
+{
+  "source": "broker_account_statement",
+  "currency": "INR",
+  "as_of": "2026-11-27T10:00:00+05:30",
+  "statement_id": "unique-source-reference",
+  "opening_equity": "50000.00",
+  "cash_flows": [],
+  "charges_by_fill": {},
+  "net_liquidation_equity": "50000.00",
+  "cash_balance": "50000.00"
+}
+```
+
+Cash flows have unique `id`, `direction` (DEPOSIT/WITHDRAWAL), positive
+`amount`, and timezone-aware `occurred_at`. The statement must be cumulative
+from the immutable opening baseline and map each durable position fill ID
+(including its order namespace) to its verified nonnegative final charge.
+Use an independent broker-authorized statement/export pipeline; never label
+estimated or synthetic data as a final broker statement. File age is limited
+to two minutes; absent, stale, incomplete, or inconsistent inputs block live
+entry. Final charge posting may lag the market; this intentionally denies
+normal entry until accounting is verified. No new strategy families are
+introduced here. Cross-expiry risk remains blocked pending its validated
+model within the existing strategy requirements.
