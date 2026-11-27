@@ -74,12 +74,12 @@ class PositionLifecycle:
             raise ValueError("Position, fill and timestamp identities are required")
         if not isinstance(leg_index, int) or isinstance(leg_index, bool) or leg_index < 0:
             raise ValueError(
-                "Leg index must be a non-negative integer"
+                "Leg index must be non-negative"
             )
         phase = phase.upper()
         if phase not in {"OPEN", "CLOSE"} or not isinstance(quantity, int) or isinstance(quantity, bool) or quantity <= 0:
             raise ValueError(
-                "Fill phase or quantity is invalid"
+                "Invalid fill phase or quantity"
             )
         try:
             fill_price = Decimal(price)
