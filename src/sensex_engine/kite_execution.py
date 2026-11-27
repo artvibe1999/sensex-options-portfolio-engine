@@ -17,7 +17,11 @@ from .execution import LegExecutionAction
 from .kite import KiteReadOnlyAdapter
 
 
-_OPEN_STATUSES = {"OPEN", "OPEN PENDING", "TRIGGER PENDING", "AMO REQ RECEIVED"}
+_OPEN_STATUSES = {
+    "OPEN", "OPEN PENDING", "TRIGGER PENDING", "AMO REQ RECEIVED",
+    "PUT ORDER REQ RECEIVED", "VALIDATION PENDING",
+    "MODIFY VALIDATION PENDING", "MODIFY PENDING", "CANCEL PENDING",
+}
 _PARTIAL_STATUSES = {"PARTIALLY FILLED"}
 
 
@@ -215,6 +219,11 @@ class KiteOrderExecutionAdapter:
             row.get("tag") == tag
             and row.get("exchange") == "BFO"
             and row.get("tradingsymbol") == contract.tradingsymbol
+            and contract.instrument_token == action.instrument_token
+            and (
+                row.get("instrument_token") is None
+                or int(row["instrument_token"]) == action.instrument_token
+            )
             and row.get("transaction_type") == action.side
             and int(row.get("quantity") or 0) == action.quantity
         )
