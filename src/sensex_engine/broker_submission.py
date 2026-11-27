@@ -129,13 +129,27 @@ class DurableBrokerSubmissionService:
             if receipt.status is BrokerOrderStatus.REJECTED
             else OrderState.ACKNOWLEDGED
         )
-        self._lifecycle.transition(
-            order_id=order_id,
-            new_state=state,
-            update_id=f"submit-result:{client_key}:{receipt.broker_order_id}",
-            broker_order_id=receipt.broker_order_id,
-            message=receipt.message or receipt.status.value,
-        )
+        try:
+            self._lifecycle.transition(
+                order_id=order_id,
+                new_state=state,
+                update_id=f"submit-result:{client_key}:{receipt.broker_order_id}",
+                broker_order_id=receipt.broker_order_id,
+                message=receipt.message or receipt.status.value,
+            )
+        except Exception as exc:
+            # The broker may have accepted the order even when local correlation
+            # persistence fails. Never repeat the broker call in this situation.
+            self._mark_unknown(
+                order_id, client_key,
+                f"Broker response received but local correlation failed: {type(exc).__name__}",
+            )
+            current = self._lifecycle.snapshot(order_id)
+            assert current is not None
+            return self._outcome(
+                current, False,
+                "Broker response could not be durably correlated; lookup and reconcile",
+            )
         current = self._lifecycle.snapshot(order_id)
         assert current is not None
         return self._outcome(
