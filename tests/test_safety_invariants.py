@@ -62,6 +62,17 @@ def test_environment_cannot_boot_live():
     assert Settings(trading_mode="live").startup_mode() == "paper"
 
 
+def test_kite_credentials_are_masked_in_settings_representation():
+    settings = Settings(
+        kite_api_key="sensitive-api-key",
+        kite_access_token="sensitive-access-token",
+    )
+    rendered = repr(settings)
+    assert "sensitive-api-key" not in rendered
+    assert "sensitive-access-token" not in rendered
+    assert settings.kite_api_key.get_secret_value() == "sensitive-api-key"
+
+
 def test_live_mode_requires_request_and_matching_confirmation():
     controller = ModeController()
     with pytest.raises(PermissionError):
