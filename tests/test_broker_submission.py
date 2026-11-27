@@ -57,8 +57,8 @@ class FakeBroker:
             raise self.submission
         return self.submission
 
-    def find_orders_by_client_key(self, client_order_key):
-        self.lookup_calls.append(client_order_key)
+    def find_orders_by_client_key(self, client_order_key, *, expected_action=None):
+        self.lookup_calls.append((client_order_key, expected_action))
         if isinstance(self.lookups, Exception):
             raise self.lookups
         return self.lookups
@@ -126,7 +126,8 @@ def test_timeout_marks_unknown_and_restart_recovery_does_not_resubmit(tmp_path):
     assert result.state is OrderState.ACKNOWLEDGED
     assert result.broker_order_id == "kite-123"
     assert recovered_broker.submit_calls == []
-    assert recovered_broker.lookup_calls == ["sx-test-order-0001"]
+    assert recovered_broker.lookup_calls[0][0] == "sx-test-order-0001"
+    assert recovered_broker.lookup_calls[0][1].instrument_token == 123
 
 
 def test_no_lookup_match_remains_unknown_and_never_retries(tmp_path):
