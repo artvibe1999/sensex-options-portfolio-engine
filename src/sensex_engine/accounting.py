@@ -9,6 +9,7 @@ import hashlib
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from .capital import adaptive_risk_budget, affordable_lots
@@ -119,12 +120,16 @@ class PortfolioAccountingService:
             "broker_trade_ids": sorted(set(str(x) for x in broker_trade_ids)),
         })
 
+    def invalidate_mark(self) -> None:
+        self._append(str(uuid4()), "ACCOUNT_MARK_INVALIDATED", {})
+
     def record_reconciled_mark(
         self, *, broker_net_equity: Decimal, unrealized_pnl: Decimal,
         available_margin: Decimal, open_max_loss: Decimal, open_positions: int,
         entries_today: int, reconciliation_id: str,
         reconciliation_report: ReconciliationReport,
         marked_at: datetime | None = None,
+        actual_cash: Decimal | None = None,
     ) -> bool:
         values = {
             "broker_net_equity": _decimal(broker_net_equity, "broker_net_equity"),
@@ -175,6 +180,8 @@ class PortfolioAccountingService:
             "reconciliation_id": reconciliation_id,
             "broker_positions_hash": positions_hash,
             "marked_at": timestamp.astimezone(UTC).isoformat(),
+            "actual_cash": str(_decimal(actual_cash, "actual cash"))
+            if actual_cash is not None else None,
         })
 
     def reconcile_and_record_mark(
@@ -239,7 +246,10 @@ class PortfolioAccountingService:
         current = now or datetime.now(UTC)
         if current.tzinfo is None:
             raise ValueError("Snapshot clock must be timezone-aware")
-        mark = max(marks, key=lambda e: e["event_id"])["payload"]
+        latest = max(marks, key=lambda e: e["event_id"])
+        if any(e["event_id"] > latest["event_id"] for e in events):
+            return None
+        mark = latest["payload"]
         marked_at = datetime.fromisoformat(mark["marked_at"])
         if not timedelta(0) <= current - marked_at <= max_mark_age:
             return None
@@ -416,6 +426,8 @@ class PortfolioAccountingService:
             _decimal(opened["payload"]["amount"], "opening_equity")
             + deposits - withdrawals + pnl
         )
+        latest = next(e["payload"] for e in reversed(events)
+                      if e["event_type"] == "ACCOUNT_RECONCILED_MARK")
         return {
             "currency": self.currency,
             "opening_equity": str(opened["payload"]["amount"]),
@@ -423,7 +435,7 @@ class PortfolioAccountingService:
             "withdrawals": str(withdrawals),
             "realized_net_pnl": str(pnl),
             "fees_and_taxes": str(fees),
-            "cash_balance": str(cash_balance),
+            "cash_balance": str(latest.get("actual_cash") or cash_balance),
             "unrealized_pnl": str(snapshot.daily_unrealized_pnl),
             "net_liquidation_equity": str(snapshot.net_liquidation_equity),
             "available_margin": str(snapshot.available_margin),
