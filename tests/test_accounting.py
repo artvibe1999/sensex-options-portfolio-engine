@@ -147,3 +147,40 @@ def test_drawdown_is_flow_adjusted_and_does_not_treat_deposit_as_profit(tmp_path
     assert snapshot.net_liquidation_equity == Decimal("140000")
     assert snapshot.weekly_drawdown_pct == Decimal("0.10")
     assert snapshot.peak_equity / snapshot.net_liquidation_equity == Decimal("1") / Decimal("0.9")
+
+
+
+def test_strategy_lot_sizing_uses_live_equity_risk_allocation_and_margin(tmp_path):
+    _, account = make_account(tmp_path)
+    now = datetime.now(UTC)
+    account.set_opening_equity(Decimal("100000"), idempotency_key="opening")
+    account.record_reconciled_mark(
+        broker_net_equity=Decimal("100000"), unrealized_pnl=Decimal("0"),
+        available_margin=Decimal("10000"), open_max_loss=Decimal("1000"),
+        open_positions=1, entries_today=1, reconciliation_id="sizing",
+        broker_positions_hash="sha256:positions", marked_at=now,
+    )
+    lots = account.size_strategy_lots(
+        strategy_risk_pct=Decimal("0.01"),
+        aggregate_risk_pct=Decimal("0.02"),
+        allocation_pct=Decimal("0.50"),
+        max_loss_per_lot=Decimal("400"),
+        estimated_cost_per_lot=Decimal("20"),
+        margin_per_lot=Decimal("2000"),
+        max_lots=10,
+        now=now,
+    )
+    assert lots == 2
+
+
+def test_strategy_lot_sizing_fails_closed_without_authoritative_snapshot(tmp_path):
+    _, account = make_account(tmp_path)
+    assert account.size_strategy_lots(
+        strategy_risk_pct=Decimal("0.01"),
+        aggregate_risk_pct=Decimal("0.02"),
+        allocation_pct=Decimal("0.50"),
+        max_loss_per_lot=Decimal("400"),
+        estimated_cost_per_lot=Decimal("20"),
+        margin_per_lot=Decimal("2000"),
+        max_lots=10,
+    ) == 0
