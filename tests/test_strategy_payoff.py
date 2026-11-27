@@ -141,3 +141,57 @@ def test_directional_regimes_offer_protected_credit_spread_candidates():
     assert bear_credit.max_profit is not None and bear_credit.max_profit > 0
     assert bear_credit.legs[0].contract.strike == Decimal("81000")
     assert bear_credit.legs[1].contract.strike == Decimal("80500")
+
+
+def test_spread_candidates_use_executable_side_prices_and_oldest_quote_time():
+    from dataclasses import replace
+    from datetime import timedelta
+
+    long = _item(31, "80000", Right.CE, "500")
+    short = _item(32, "80500", Right.CE, "300")
+    long = replace(
+        long,
+        quote=replace(long.quote, bid=Decimal("490"), ask=Decimal("510")),
+    )
+    short = replace(
+        short,
+        quote=replace(
+            short.quote,
+            bid=Decimal("290"),
+            ask=Decimal("310"),
+            timestamp=short.quote.timestamp + timedelta(seconds=1),
+        ),
+    )
+    chain = OptionChainSnapshot(
+        Decimal("80000"), long.quote.timestamp, Decimal("0.06"),
+        (long, short), (),
+    )
+    candidates = generate_directional_verticals(
+        chain, regime=Regime.BULL_TREND, lots=1
+    )
+    debit = next(x for x in candidates if x.strategy_id == "SENSEX_BULL_CALL_DEBIT")
+    assert debit.net_debit == Decimal("4400")
+    assert debit.data_timestamp == long.quote.timestamp
+
+
+def test_spread_candidate_rejected_when_leg_quotes_are_too_far_apart():
+    from dataclasses import replace
+    from datetime import timedelta
+
+    long = _item(41, "80000", Right.CE, "500")
+    short = _item(42, "80500", Right.CE, "300")
+    short = replace(
+        short,
+        quote=replace(
+            short.quote,
+            timestamp=short.quote.timestamp + timedelta(seconds=3),
+        ),
+    )
+    chain = OptionChainSnapshot(
+        Decimal("80000"), long.quote.timestamp, Decimal("0.06"),
+        (long, short), (),
+    )
+    candidates = generate_directional_verticals(
+        chain, regime=Regime.BULL_TREND, lots=1
+    )
+    assert not candidates
