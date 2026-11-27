@@ -78,6 +78,7 @@ class KiteOrderExecutionAdapter:
         self, client_order_key: str, *, expected_action: LegExecutionAction | None = None
     ) -> tuple[BrokerOrderReceipt, ...]:
         tag = self.tag_for_client_key(client_order_key)
+        self._throttle_order_call()
         rows = self._client.orders()
         if not isinstance(rows, list):
             raise ValueError("Kite order book response must be a list")
@@ -171,6 +172,7 @@ class KiteOrderExecutionAdapter:
         if not isinstance(broker_order_id, str) or not broker_order_id.strip():
             raise ValueError("Broker order ID is required")
         tag = self.tag_for_client_key(client_order_key)
+        self._throttle_order_call()
         history = self._client.order_history(broker_order_id)
         rows = history if isinstance(history, list) else [history]
         if not rows or not isinstance(rows[-1], dict):
@@ -186,6 +188,16 @@ class KiteOrderExecutionAdapter:
         if len(contract_matches) != 1:
             raise ValueError("Order contract is not a current SENSEX option in the BFO master")
         contract = contract_matches[0]
+        if (
+            row.get("instrument_token") is not None
+            and int(row["instrument_token"]) != contract.instrument_token
+        ):
+            raise ValueError("Broker order token does not match the current contract master")
+        quantity = int(row.get("quantity") or 0)
+        if quantity <= 0 or quantity % contract.lot_size:
+            raise ValueError("Broker order quantity is not a whole number of current lots")
+        if row.get("transaction_type") not in {"BUY", "SELL"}:
+            raise ValueError("Broker order side is invalid")
         if row.get("status") not in _OPEN_STATUSES | _PARTIAL_STATUSES:
             raise ValueError("Only open or partially filled orders may be modified/cancelled")
         return row, contract
