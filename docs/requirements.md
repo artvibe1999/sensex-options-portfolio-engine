@@ -957,7 +957,7 @@ unless it is explicitly required by this document.
 - Added cancellation-terminality projection so late fill events after cancellation preserve the cancel-confirmed fact. Late opening fills discovered after flattening reopen the position to CLOSING instead of disappearing from the exposure ledger.
 - Added a hard execution gate that replays pending fill-inbox receipts and refuses any new broker action while fill-to-position projection remains incomplete.
 - Verification at commit `c42131f3de93b49e45fefaea49e93eb127488819`: Ruff passed; pytest **205 passed**; **85% statement coverage**. Push CI and PR CI both passed.
-- PE-03 does not complete PE-04. Runtime wiring, full live readiness/risk/market-data dependency injection and Telegram activation gates remain outstanding. Paper remains the process-start default.
+- PE-03 is an isolated execution capability; PE-04 separately completed the runtime readiness dependency graph. The PE-03 coordinator remains uninvoked by Telegram and its live-enable flags remain false. Paper remains the process-start default.
 
 
 ### PE-03 exact-head verification
@@ -981,3 +981,12 @@ unless it is explicitly required by this document.
 - If Kite credentials or the optional SDK are missing, runtime construction falls back to a deny-all provider and keeps startup in PAPER mode with entries paused. No credentials are logged.
 - `/resume` and `/confirm_live` both evaluate the full readiness provider; startup recovery alone cannot enable trading.
 - PE-04 does not enable order submission, activate the PE-03 coordinator, merge the PR, or deploy the application.
+
+
+### PE-04 exact-head verification
+- Exact branch head: `6e0fba9efdddc4e7bd7932f5eb078a7430b208a3`.
+- Ruff passed; pytest **218 passed**; **83% total statement coverage**.
+- Push CI: https://github.com/artvibe1999/sensex-options-portfolio-engine/actions/runs/46007642623 — passed.
+- Pull-request CI: https://github.com/artvibe1999/sensex-options-portfolio-engine/actions/runs/46007651387 — passed.
+- PE-04 is complete as a runtime readiness integration. Live activation remains blocked by the deliberately unavailable authoritative PE-06 portfolio-risk snapshot provider, and also requires operator-confirmed Kite static-IP registration.
+- PR #1 remains open, draft and unmerged. No deployment or live order was performed.
