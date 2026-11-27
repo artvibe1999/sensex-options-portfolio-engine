@@ -241,6 +241,7 @@ def build_application_from_settings(
     order_execution_adapter = None
     live_readiness_service = None
     accounting_refresh = None
+    coordinator = None
     if readiness_provider is None:
         def deny_readiness() -> tuple[bool, bool]:
             return False, False
@@ -300,6 +301,31 @@ def build_application_from_settings(
                     positions=positions,
                     ingestion=ingestion,
                 )
+                from decimal import Decimal
+
+                from .entry_sizing import EntrySizingService
+                from .risk import RiskEngine, RiskLimits
+
+                limits = RiskLimits(**{
+                    name: Decimal(str(getattr(settings, name, getattr(RiskLimits(), name))))
+                    if isinstance(getattr(RiskLimits(), name), Decimal)
+                    else int(getattr(settings, name, getattr(RiskLimits(), name)))
+                    for name in RiskLimits.__dataclass_fields__
+                })
+                sizing = EntrySizingService(
+                    broker=runtime_broker, snapshot_provider=portfolio_snapshot_provider,
+                    risk=RiskEngine(limits),
+                )
+
+                def entry_allowed() -> bool:
+                    return (
+                        operations.mode.mode.value == "live"
+                        and not operations.paused and not operations.emergency_active
+                        and operations.startup_recovery_complete
+                        and getattr(settings, "kite_static_ip_confirmed", False) is True
+                        and accounting_refresh is not None
+                    )
+
                 coordinator = LiveMultiLegExecutionCoordinator(
                     orders=orders,
                     positions=positions,
@@ -307,6 +333,8 @@ def build_application_from_settings(
                     trade_history=trade_history,
                     limit_price=build_emergency_limit_price_provider(runtime_broker),
                     live_execution_enabled=True,
+                    entry_sizing=sizing, entry_allowed=entry_allowed,
+                    require_entry_approval=True,
                 )
                 operations.emergency_close_all = EmergencyCloseAllService(
                     operations=operations,
@@ -347,6 +375,7 @@ def build_application_from_settings(
     application.bot_data["order_lifecycle"] = orders
     application.bot_data["portfolio_accounting"] = accounting
     application.bot_data["accounting_refresh"] = accounting_refresh
+    application.bot_data["live_execution_coordinator"] = coordinator
     application.bot_data["portfolio_snapshot_provider"] = portfolio_snapshot_provider
     application.bot_data["kite_broker"] = runtime_broker
     application.bot_data["kite_order_execution_adapter"] = order_execution_adapter
