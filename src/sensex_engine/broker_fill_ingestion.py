@@ -66,6 +66,12 @@ class BrokerFillIngestionService:
                 prior["position_event_created"] = False
                 return FillIngestionResult(**prior)
             raise RuntimeError("Broker fill receipt is already being processed")
+        return self._process_claimed(event, event_key)
+
+    def _process_claimed(
+        self, event: BrokerFillEvent, event_key: str
+    ) -> FillIngestionResult:
+        store = self._coordinator.orders.store
         try:
             result = self._apply(event)
             result_data = {
@@ -100,7 +106,11 @@ class BrokerFillIngestionService:
                 filled_at=payload["filled_at"],
                 phase=payload["phase"],
             )
-            recovered.append(self.ingest(event))
+            event_key = f"{event.broker_order_id}:{event.broker_trade_id}"
+            claim = store.claim_broker_fill(event_key=event_key)
+            if claim is None:
+                continue
+            recovered.append(self._process_claimed(event, event_key))
         return recovered
 
     def _apply(self, event: BrokerFillEvent) -> FillIngestionResult:
