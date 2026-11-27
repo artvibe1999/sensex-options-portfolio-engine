@@ -8,12 +8,12 @@ from sensex_engine.domain import (
     Contract,
     OptionLeg,
     PortfolioSnapshot,
+    Position,
     Regime,
     Right,
     Side,
     StrategyCandidate,
     TradingMode,
-    Position,
 )
 from sensex_engine.eligibility import regime_eligibility
 from sensex_engine.execution import PaperExecutionAdapter
@@ -73,11 +73,7 @@ def test_live_mode_requires_request_and_matching_confirmation():
 
 def test_paper_adapter_rejects_live_position():
     adapter = PaperExecutionAdapter()
-    position = Position.create(
-        "test",
-        make_candidate().legs,
-        TradingMode.LIVE,
-    )
+    position = Position.create("test", make_candidate().legs, TradingMode.LIVE)
     with pytest.raises(ValueError):
         adapter.submit(position)
 
