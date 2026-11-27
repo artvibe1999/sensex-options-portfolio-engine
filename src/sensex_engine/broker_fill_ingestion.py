@@ -66,10 +66,10 @@ class BrokerFillIngestionService:
                 prior["position_event_created"] = False
                 return FillIngestionResult(**prior)
             raise RuntimeError("Broker fill receipt is already being processed")
-        return self._process_claimed(event, event_key)
+        return self._process_claimed(event, event_key, int(claim["attempts"]))
 
     def _process_claimed(
-        self, event: BrokerFillEvent, event_key: str
+        self, event: BrokerFillEvent, event_key: str, attempt: int
     ) -> FillIngestionResult:
         store = self._coordinator.orders.store
         try:
@@ -83,10 +83,14 @@ class BrokerFillIngestionService:
                 "order_state": result.order_state,
                 "position_status": result.position_status,
             }
-            store.complete_broker_fill(event_key=event_key, result=result_data)
+            store.complete_broker_fill(
+                event_key=event_key, attempt=attempt, result=result_data
+            )
             return result
         except Exception as exc:
-            store.fail_broker_fill(event_key=event_key, error=str(exc))
+            store.fail_broker_fill(
+                event_key=event_key, attempt=attempt, error=str(exc)
+            )
             raise
 
     def recover_pending(self, *, limit: int = 100) -> list[FillIngestionResult]:
@@ -110,7 +114,9 @@ class BrokerFillIngestionService:
             claim = store.claim_broker_fill(event_key=event_key)
             if claim is None:
                 continue
-            recovered.append(self._process_claimed(event, event_key))
+            recovered.append(
+                self._process_claimed(event, event_key, int(claim["attempts"]))
+            )
         return recovered
 
     def _apply(self, event: BrokerFillEvent) -> FillIngestionResult:
