@@ -80,7 +80,8 @@ independent risk, margin, execution-liquidity and broker-reconciliation gates.
 ## Read-only broker reconciliation
 
 The reconciliation service compares every non-closed internal position leg,
-netted by exchange instrument token, with the broker's net position snapshot.
+netted by exchange instrument token, with the broker's BFO net position snapshot.
+Unrelated non-BFO holdings in the same Kite account are outside this SENSEX engine's scope.
 It also checks the current contract-master symbol mapping and identifies active
 or pending broker orders. Fractional/invalid quantities, malformed broker
 responses, unknown non-zero positions, quantity mismatches, pending orders,
