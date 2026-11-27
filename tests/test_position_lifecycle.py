@@ -109,11 +109,11 @@ def test_position_rejects_duplicate_leg_indexes_and_bad_contracts(tmp_path):
 
 def test_late_open_fill_after_flattening_reopens_position_as_closing(tmp_path):
     lifecycle = make_position(tmp_path)
-    fill(lifecycle, leg=0, phase="OPEN", fill_id="o1", quantity=10)
-    fill(lifecycle, leg=1, phase="OPEN", fill_id="o2", quantity=10)
+    fill(lifecycle, leg=0, phase="OPEN", fill_id="o1", quantity=5)
+    fill(lifecycle, leg=1, phase="OPEN", fill_id="o2", quantity=5)
     lifecycle.transition(position_id="position-1", status="CLOSING", update_id="close")
-    fill(lifecycle, leg=1, phase="CLOSE", fill_id="c1", quantity=10)
-    fill(lifecycle, leg=0, phase="CLOSE", fill_id="c2", quantity=10)
+    fill(lifecycle, leg=1, phase="CLOSE", fill_id="c1", quantity=5)
+    fill(lifecycle, leg=0, phase="CLOSE", fill_id="c2", quantity=5)
     assert lifecycle.snapshot("position-1")["status"] == "CLOSED"
 
     # A trade-history update can arrive after the cancel/close sequence was
