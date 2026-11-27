@@ -94,6 +94,7 @@ class LiveReadinessService:
             reconciliation = self.reconciliation_service.reconcile_store(
                 self.broker, contracts=contracts,
                 position_lifecycle=self.position_lifecycle,
+                order_lifecycle=self.order_lifecycle,
             )
             if not reconciliation.reconciled:
                 reasons.extend(reconciliation.mismatches or ("Broker reconciliation failed",))
