@@ -263,6 +263,13 @@ class DurableBrokerSubmissionService:
             BrokerOrderStatus.CANCELLED: OrderState.CANCELLED,
         }
         target = target_by_status[receipt.status]
+        if (
+            receipt.status is BrokerOrderStatus.FILLED
+            and int(snapshot["filled_quantity"]) < int(snapshot["quantity"])
+        ):
+            # Kite order status can lead individual trade-history visibility.
+            # Keep the order unresolved until the fill ledger accounts for every unit.
+            target = OrderState.UNKNOWN
         if not (state is OrderState.CANCEL_PENDING and target is OrderState.OPEN):
             self._lifecycle.transition(
                 order_id=order_id,
