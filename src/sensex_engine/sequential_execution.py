@@ -8,6 +8,7 @@ result stops the sequence and leaves the position blocked for reconciliation.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Protocol
 
 from .domain import Position, TradingMode
@@ -79,8 +80,20 @@ class PaperSequentialExecutionCoordinator:
                     False, True, "Sequence halted; reconcile before retrying",
                 )
 
+            valid_result = (
+                isinstance(result, OrderResult)
+                and isinstance(result.order_id, str)
+                and isinstance(result.filled_quantity, int)
+                and not isinstance(result.filled_quantity, bool)
+                and isinstance(result.status, OrderStatus)
+                and (
+                    result.average_price is None
+                    or isinstance(result.average_price, Decimal)
+                )
+            )
             valid_fill = (
-                result.status is OrderStatus.FILLED
+                valid_result
+                and result.status is OrderStatus.FILLED
                 and result.filled_quantity == action.quantity
                 and bool(result.order_id.strip())
                 and result.average_price is not None
@@ -88,8 +101,9 @@ class PaperSequentialExecutionCoordinator:
                 and result.average_price > 0
             )
             if not valid_fill:
+                safe_result = result if isinstance(result, OrderResult) else None
                 outcomes.append(LegExecutionOutcome(
-                    action, result, False,
+                    action, safe_result, False,
                     "Leg is not confirmed fully filled; later legs were not submitted",
                 ))
                 return SequentialExecutionReport(
