@@ -223,7 +223,7 @@ class SqliteStore:
                     allowed = {
                         "PENDING": {"CLOSING", "ERROR"},
                         "OPEN": {"CLOSING", "ERROR"},
-                        "CLOSING": {"CLOSED", "ERROR"},
+                        "CLOSING": {"ERROR"},
                         "ERROR": {"CLOSING"},
                         "CLOSED": set(),
                     }
