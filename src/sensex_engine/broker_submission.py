@@ -187,6 +187,10 @@ class DurableBrokerSubmissionService:
                 tradingsymbol=str(snapshot["tradingsymbol"]),
                 side=str(snapshot["side"]),
                 quantity=int(snapshot["quantity"]),
+                limit_price=(
+                    Decimal(str(snapshot["limit_price"]))
+                    if snapshot.get("limit_price") is not None else None
+                ),
             )
             matches = self._broker.find_orders_by_client_key(
                 client_key, expected_action=expected_action
