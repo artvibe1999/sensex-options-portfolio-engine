@@ -397,6 +397,19 @@ def run_from_environment() -> None:
             monitor_holder["monitor"] = monitor
             application.bot_data["broker_monitor"] = monitor
             await monitor.start()
+        else:
+            logger.error("Kite broker monitor is disabled because credentials are missing")
+            for chat_id in allowed_chats:
+                try:
+                    await application.bot.send_message(
+                        chat_id=chat_id,
+                        text=(
+                            "SENSEX broker monitor is DISABLED: Kite credentials are "
+                            "missing. Startup recovery is incomplete; entries must remain paused."
+                        ),
+                    )
+                except Exception:
+                    logger.exception("Could not deliver missing-Kite-credentials alert")
 
     async def post_shutdown(application: Any) -> None:
         monitor = monitor_holder.get("monitor")
