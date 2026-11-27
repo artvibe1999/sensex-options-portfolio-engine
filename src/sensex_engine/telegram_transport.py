@@ -227,8 +227,9 @@ def build_application_from_settings(
     portfolio_queries = PortfolioQueryService(
         positions=positions, orders=orders, accounting=accounting,
     )
-    if portfolio_snapshot_provider is None:
-        portfolio_snapshot_provider = accounting.snapshot
+    use_default_snapshot = portfolio_snapshot_provider is None
+    if use_default_snapshot:
+        portfolio_snapshot_provider = lambda: None
     operations = operations_from_settings(settings, portfolio_queries=portfolio_queries)
     operations.mode.force_paper()
     operations.paused = True
@@ -239,6 +240,7 @@ def build_application_from_settings(
     runtime_broker = None
     order_execution_adapter = None
     live_readiness_service = None
+    accounting_refresh = None
     if readiness_provider is None:
         def deny_readiness() -> tuple[bool, bool]:
             return False, False
@@ -261,6 +263,15 @@ def build_application_from_settings(
                 factory = broker_factory or KiteReadOnlyAdapter.from_credentials
                 runtime_broker = factory(api_key, access_token)
                 order_execution_adapter = KiteOrderExecutionAdapter(runtime_broker)
+                statement_path = getattr(settings, "broker_account_statement_path", "")
+                if use_default_snapshot and statement_path:
+                    from .accounting_refresh import LiveAccountingRefresh, StatementFeed
+
+                    accounting_refresh = LiveAccountingRefresh(
+                        account=accounting, broker=runtime_broker, positions=positions,
+                        orders=orders, feed=StatementFeed(statement_path),
+                    )
+                    portfolio_snapshot_provider = accounting_refresh.snapshot
                 live_readiness_service = build_kite_live_readiness_service(
                     broker=runtime_broker,
                     store=store,
@@ -335,6 +346,7 @@ def build_application_from_settings(
     application.bot_data["position_lifecycle"] = positions
     application.bot_data["order_lifecycle"] = orders
     application.bot_data["portfolio_accounting"] = accounting
+    application.bot_data["accounting_refresh"] = accounting_refresh
     application.bot_data["portfolio_snapshot_provider"] = portfolio_snapshot_provider
     application.bot_data["kite_broker"] = runtime_broker
     application.bot_data["kite_order_execution_adapter"] = order_execution_adapter
@@ -415,6 +427,7 @@ def build_supervised_monitor_from_settings(
     store: SqliteStore,
     operations: OperationsController,
     alert_sender: Callable[[bool, str], Any] | None = None,
+    accounting_refresh: Any | None = None,
     broker_factory: Callable[[str, str], Any] | None = None,
 ) -> KiteBrokerMonitor | None:
     """Build the recurring read-only monitor; missing credentials keep it absent.
@@ -481,6 +494,7 @@ def build_supervised_monitor_from_settings(
     return KiteBrokerMonitor(
         recovery_factory=recovery_factory,
         on_health_change=on_health_change,
+        after_recovery=accounting_refresh.snapshot if accounting_refresh else None,
         poll_interval_seconds=int(
             getattr(settings, "kite_monitor_poll_interval_seconds", 30)
         ),
@@ -519,6 +533,7 @@ def run_from_environment() -> None:
             store=store,
             operations=operations,
             alert_sender=send_monitor_alert,
+            accounting_refresh=application.bot_data.get("accounting_refresh"),
         )
         if monitor is not None:
             monitor_holder["monitor"] = monitor
