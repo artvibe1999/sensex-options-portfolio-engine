@@ -15,6 +15,8 @@ class ModeController:
     def request_live(self, user_id: int, *, authorized: bool) -> None:
         if not authorized:
             raise PermissionError("Telegram user is not authorized")
+        if self.mode is TradingMode.LIVE:
+            raise RuntimeError("Already in live mode; switch to paper before requesting again")
         self.live_requested_by = user_id
         self.live_confirmed_by = None
 
