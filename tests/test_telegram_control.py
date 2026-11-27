@@ -4,8 +4,8 @@ from sensex_engine.domain import TradingMode
 from sensex_engine.mode import ModeController
 from sensex_engine.order_lifecycle import OrderLifecycle
 from sensex_engine.persistence import SqliteStore
-from sensex_engine.position_lifecycle import PositionLifecycle
 from sensex_engine.portfolio_queries import PortfolioQueryService
+from sensex_engine.position_lifecycle import PositionLifecycle
 from sensex_engine.telegram_auth import TelegramAllowlist
 from sensex_engine.telegram_control import OperationsController
 
