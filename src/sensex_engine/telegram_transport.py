@@ -217,12 +217,18 @@ def build_application_from_settings(
     """
     store = SqliteStore(_sqlite_database_path(settings.database_url))
     from .order_lifecycle import OrderLifecycle
+    from .accounting import PortfolioAccountingService
     from .portfolio_queries import PortfolioQueryService
     from .position_lifecycle import PositionLifecycle
 
     positions = PositionLifecycle(store)
     orders = OrderLifecycle(store)
-    portfolio_queries = PortfolioQueryService(positions=positions, orders=orders)
+    accounting = PortfolioAccountingService(store=store)
+    portfolio_queries = PortfolioQueryService(
+        positions=positions, orders=orders, accounting=accounting,
+    )
+    if portfolio_snapshot_provider is None:
+        portfolio_snapshot_provider = accounting.snapshot
     operations = operations_from_settings(settings, portfolio_queries=portfolio_queries)
     operations.mode.force_paper()
     operations.paused = True
@@ -328,6 +334,8 @@ def build_application_from_settings(
     application.bot_data["portfolio_store"] = store
     application.bot_data["position_lifecycle"] = positions
     application.bot_data["order_lifecycle"] = orders
+    application.bot_data["portfolio_accounting"] = accounting
+    application.bot_data["portfolio_snapshot_provider"] = portfolio_snapshot_provider
     application.bot_data["kite_broker"] = runtime_broker
     application.bot_data["kite_order_execution_adapter"] = order_execution_adapter
     application.bot_data["live_readiness_service"] = live_readiness_service
