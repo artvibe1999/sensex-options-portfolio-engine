@@ -95,7 +95,8 @@ class OperationsController:
             return self.portfolio_queries.risk_text()
         if normalized in {"/strategies"}:
             raise NotImplementedError(
-                "Strategy runtime reporting is not available until the strategy engine is implemented."
+                "Strategy runtime reporting is not available until the strategy "
+                "engine is implemented."
             )
         if normalized in {"/close", "/closeall", "/emergency"}:
             raise NotImplementedError(
