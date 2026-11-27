@@ -417,26 +417,32 @@ class SqliteStore:
             connection.close()
 
     def complete_broker_fill(
-        self, *, event_key: str, result: dict[str, Any]
+        self, *, event_key: str, attempt: int, result: dict[str, Any]
     ) -> None:
+        if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt <= 0:
+            raise ValueError("Broker fill claim attempt must be a positive integer")
         encoded = json.dumps(result, sort_keys=True, separators=(",", ":"), default=str)
         with self._connection() as connection:
             cursor = connection.execute(
                 """UPDATE broker_fill_inbox
                    SET status = 'PROCESSED', result_json = ?, last_error = '', updated_at = ?
-                   WHERE event_key = ? AND status = 'PROCESSING'""",
-                (encoded, datetime.now(UTC).isoformat(), event_key),
+                   WHERE event_key = ? AND status = 'PROCESSING' AND attempts = ?""",
+                (encoded, datetime.now(UTC).isoformat(), event_key, attempt),
             )
             if cursor.rowcount != 1:
                 raise RuntimeError("Broker fill receipt is not claimed for completion")
 
-    def fail_broker_fill(self, *, event_key: str, error: str) -> None:
+    def fail_broker_fill(
+        self, *, event_key: str, attempt: int, error: str
+    ) -> None:
+        if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt <= 0:
+            raise ValueError("Broker fill claim attempt must be a positive integer")
         with self._connection() as connection:
             cursor = connection.execute(
                 """UPDATE broker_fill_inbox
                    SET status = 'RECEIVED', last_error = ?, updated_at = ?
-                   WHERE event_key = ? AND status = 'PROCESSING'""",
-                (error[:500], datetime.now(UTC).isoformat(), event_key),
+                   WHERE event_key = ? AND status = 'PROCESSING' AND attempts = ?""",
+                (error[:500], datetime.now(UTC).isoformat(), event_key, attempt),
             )
             if cursor.rowcount != 1:
                 raise RuntimeError("Broker fill receipt is not claimed for failure")
