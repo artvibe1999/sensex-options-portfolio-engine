@@ -186,3 +186,13 @@ class PositionLifecycle:
             leg["remaining_quantity"] == 0 for leg in created["legs"]
         )
         return created
+
+    def active_snapshots(self) -> list[dict[str, Any]]:
+        """Return all non-closed durable position projections in stable order."""
+        snapshots = [
+            snapshot
+            for position_id in self.store.aggregate_ids_for_event("POSITION_CREATED")
+            if (snapshot := self.snapshot(position_id)) is not None
+            and snapshot["status"] != "CLOSED"
+        ]
+        return snapshots
