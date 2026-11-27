@@ -158,6 +158,120 @@ class SqliteStore:
         finally:
             connection.close()
 
+
+    def append_position_event(
+        self,
+        *,
+        idempotency_key: str,
+        event_type: str,
+        aggregate_id: str,
+        payload: dict[str, Any],
+        expected_status: str | None = None,
+        fill_phase: str | None = None,
+        leg_index: int | None = None,
+        fill_quantity: int = 0,
+    ) -> bool:
+        """Serialize position creation, status changes and leg fills transactionally."""
+        if not idempotency_key.strip() or not event_type.strip() or not aggregate_id.strip():
+            raise ValueError("Position event identity fields are required")
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            duplicate = connection.execute(
+                "SELECT event_type, aggregate_id, payload_json FROM portfolio_events "
+                "WHERE idempotency_key = ?", (idempotency_key,)
+            ).fetchone()
+            if duplicate is not None:
+                if (duplicate["event_type"] != event_type
+                    or duplicate["aggregate_id"] != aggregate_id
+                    or duplicate["payload_json"] != encoded):
+                    raise ValueError("Position event idempotency key conflicts with existing event")
+                connection.commit()
+                return False
+            rows = connection.execute(
+                "SELECT event_type, payload_json FROM portfolio_events "
+                "WHERE aggregate_id = ? ORDER BY event_id", (aggregate_id,)
+            ).fetchall()
+            if event_type == "POSITION_CREATED":
+                if rows:
+                    raise ValueError("Position already exists")
+                if payload.get("status") != "PENDING" or not payload.get("legs"):
+                    raise ValueError("Position must start PENDING with at least one leg")
+            else:
+                if not rows or rows[0]["event_type"] != "POSITION_CREATED":
+                    raise ValueError("Unknown position")
+                created = json.loads(rows[0]["payload_json"])
+                status = created["status"]
+                legs = {int(leg["leg_index"]): leg for leg in created["legs"]}
+                open_fills: dict[int, int] = {}
+                close_fills: dict[int, int] = {}
+                for row in rows[1:]:
+                    prior = json.loads(row["payload_json"])
+                    if row["event_type"] == "POSITION_STATUS_CHANGED":
+                        status = prior["status"]
+                    elif row["event_type"] == "POSITION_LEG_FILL_RECORDED":
+                        target = open_fills if prior["phase"] == "OPEN" else close_fills
+                        index = int(prior["leg_index"])
+                        target[index] = target.get(index, 0) + int(prior["quantity"])
+                        if prior.get("status"):
+                            status = prior["status"]
+                if expected_status is not None and status != expected_status:
+                    raise RuntimeError("Position status changed concurrently; reload before retrying")
+                if event_type == "POSITION_STATUS_CHANGED":
+                    target = payload.get("status")
+                    allowed = {
+                        "PENDING": {"CLOSING", "ERROR"},
+                        "OPEN": {"CLOSING", "ERROR"},
+                        "CLOSING": {"CLOSED", "ERROR"},
+                        "ERROR": {"CLOSING"},
+                        "CLOSED": set(),
+                    }
+                    if target not in allowed.get(status, set()):
+                        raise ValueError(f"Invalid position transition: {status} -> {target}")
+                elif event_type == "POSITION_LEG_FILL_RECORDED":
+                    if fill_phase not in {"OPEN", "CLOSE"} or leg_index not in legs or fill_quantity <= 0:
+                        raise ValueError("Invalid position leg fill")
+                    if fill_phase == "OPEN" and status != "PENDING":
+                        raise ValueError("Opening fills are accepted only while position is PENDING")
+                    if fill_phase == "CLOSE" and status != "CLOSING":
+                        raise ValueError("Closing fills are accepted only while position is CLOSING")
+                    opened = open_fills.get(leg_index, 0)
+                    closed = close_fills.get(leg_index, 0)
+                    limit = int(legs[leg_index]["quantity"])
+                    if fill_phase == "OPEN" and opened + fill_quantity > limit:
+                        raise ValueError("Opening fills exceed planned leg quantity")
+                    if fill_phase == "CLOSE" and closed + fill_quantity > opened:
+                        raise ValueError("Closing fills exceed confirmed open leg quantity")
+                    if fill_phase == "OPEN":
+                        all_open = all(
+                            open_fills.get(index, 0) + (fill_quantity if index == leg_index else 0)
+                            == int(leg["quantity"]) for index, leg in legs.items()
+                        )
+                        payload["status"] = "OPEN" if all_open else "PENDING"
+                    else:
+                        all_closed = all(
+                            close_fills.get(index, 0) + (fill_quantity if index == leg_index else 0)
+                            == open_fills.get(index, 0) for index in legs
+                        )
+                        payload["status"] = "CLOSED" if all_closed else "CLOSING"
+                else:
+                    raise ValueError("Unsupported position event type")
+            encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+            connection.execute(
+                "INSERT INTO portfolio_events "
+                "(idempotency_key, event_type, aggregate_id, payload_json, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (idempotency_key, event_type, aggregate_id, encoded, datetime.now(UTC).isoformat()),
+            )
+            connection.commit()
+            return True
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
     def record_command(
         self,
         *,
