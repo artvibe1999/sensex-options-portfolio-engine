@@ -165,7 +165,7 @@ def test_partial_second_leg_is_cancelled_then_residual_is_flattened_short_first(
     report = coordinator.execute(position, ExecutionPhase.OPEN)
 
     assert not report.completed
-    assert not report.blocked
+    assert not report.blocked, (report, orders.all_snapshots(), broker.cancel_calls)
     assert report.residual_exposure == ()
     assert [call[0].side for call in broker.submit_calls] == ["BUY", "SELL", "BUY", "SELL"]
     assert len(broker.cancel_calls) == 1
@@ -216,7 +216,9 @@ def test_close_partial_fill_is_cancelled_and_replaced_only_after_confirmation(tm
     assert opened.completed
 
     closed = coordinator.execute(position, ExecutionPhase.CLOSE)
-    assert closed.completed and not closed.blocked
+    assert closed.completed and not closed.blocked, (
+        closed, orders.all_snapshots(), broker.cancel_calls
+    )
     assert len(broker.cancel_calls) == 1
     assert [call[0].side for call in broker.submit_calls] == [
         "BUY", "SELL", "BUY", "BUY", "SELL"
