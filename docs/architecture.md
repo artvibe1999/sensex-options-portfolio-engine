@@ -5,13 +5,14 @@ The application is split into domain, market-data/broker ports, strategy eligibi
 ## Data flow
 
 1. Load the current BSE contract master and validate SENSEX option instruments, expiry, lot size, tick size, and tradingsymbol.
-2. Build option-chain snapshots from supported broker quotes/instruments. Kite Connect capabilities and rate limits must be verified; do not assume a native complete option-chain endpoint.
-3. Validate quote freshness, bid/ask spread, depth/volume, IV/Greeks availability, and contract identity.
-4. Classify regime. Unknown/transition regimes are no-trade.
-5. Generate only defined-risk multi-leg candidates and calculate payoff, margin, transaction costs, and stress loss.
-6. Evaluate the candidate against portfolio-wide limits and current broker reconciliation.
-7. Submit through the selected execution port. Persist intent before sending orders and reconcile every leg/fill.
-8. Monitor positions and report state through Telegram.
+2. Use the read-only Kite adapter to load the BFO instrument master and fetch quotes by exchange-qualified tradingsymbol. Filter to SENSEX CE/PE contracts and retain exchange-provided expiry, lot size, tick size, strike and instrument token. The adapter does not place orders.
+3. Build option-chain snapshots from supported broker quotes/instruments. Kite Connect capabilities and rate limits must be verified; do not assume a native complete option-chain endpoint.
+4. Validate quote freshness, bid/ask spread, depth/volume, IV/Greeks availability, and contract identity.
+5. Classify regime. Unknown/transition regimes are no-trade.
+6. Generate only defined-risk multi-leg candidates and calculate payoff, margin, transaction costs, and stress loss.
+7. Evaluate the candidate against portfolio-wide limits and current broker reconciliation.
+8. Submit through the selected execution port. Persist intent before sending orders and reconcile every leg/fill.
+9. Monitor positions and report state through Telegram.
 
 ## Capital accounting
 
