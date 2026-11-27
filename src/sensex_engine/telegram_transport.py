@@ -159,7 +159,11 @@ def _sqlite_database_path(database_url: str) -> str:
     raise ValueError("Telegram transport currently requires a SQLite DATABASE_URL")
 
 
-def build_application_from_settings(settings: Any) -> Any:
+def build_application_from_settings(
+    settings: Any,
+    *,
+    readiness_provider: ReadinessProvider | None = None,
+) -> Any:
     """Build the actual polling application from environment-backed settings.
 
     This default entrypoint deliberately supplies no readiness provider, so
@@ -173,6 +177,7 @@ def build_application_from_settings(settings: Any) -> Any:
         settings.telegram_bot_token,
         operations=operations,
         store=store,
+        readiness_provider=readiness_provider,
     )
 
 
