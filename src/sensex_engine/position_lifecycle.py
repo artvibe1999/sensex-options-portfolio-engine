@@ -73,10 +73,14 @@ class PositionLifecycle:
         if not position_id.strip() or not fill_id.strip() or not filled_at.strip():
             raise ValueError("Position, fill and timestamp identities are required")
         if not isinstance(leg_index, int) or isinstance(leg_index, bool) or leg_index < 0:
-            raise ValueError("Leg index must be a non-negative integer")
+            raise ValueError(
+                "Leg index must be a non-negative integer"
+            )
         phase = phase.upper()
         if phase not in {"OPEN", "CLOSE"} or not isinstance(quantity, int) or isinstance(quantity, bool) or quantity <= 0:
-            raise ValueError("Fill phase or quantity is invalid")
+            raise ValueError(
+                "Fill phase or quantity is invalid"
+            )
         try:
             fill_price = Decimal(price)
         except (InvalidOperation, TypeError, ValueError) as exc:
@@ -87,8 +91,11 @@ class PositionLifecycle:
         if current is None:
             raise ValueError("Unknown position")
         key = f"position-fill:{position_id}:{phase}:{fill_id}"
-        prior = next((event for event in self.store.events_for(position_id)
-                      if event["idempotency_key"] == key), None)
+        prior = next(
+            (event for event in self.store.events_for(position_id)
+             if event["idempotency_key"] == key),
+            None,
+        )
         if prior is not None:
             old = prior["payload"]
             if (int(old["leg_index"]) != leg_index or int(old["quantity"]) != quantity
@@ -152,7 +159,11 @@ class PositionLifecycle:
                 else:
                     leg["closed_quantity"] += quantity
                     price_key = "close_average_price"
-                prior_qty = leg["opened_quantity"] - quantity if phase == "OPEN" else leg["closed_quantity"] - quantity
+                prior_qty = (
+                    leg["opened_quantity"] - quantity
+                    if phase == "OPEN"
+                    else leg["closed_quantity"] - quantity
+                )
                 prior_avg = Decimal(leg[price_key]) if leg[price_key] is not None else Decimal("0")
                 average = (prior_avg * prior_qty + Decimal(payload["price"]) * quantity) / (prior_qty + quantity)
                 leg[price_key] = str(average)
