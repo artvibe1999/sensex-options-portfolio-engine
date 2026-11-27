@@ -107,3 +107,37 @@ def test_directional_selector_uses_strike_beyond_selected_long_leg():
     assert bear
     assert bear[0].legs[0].contract.strike == Decimal("79500")
     assert bear[0].legs[1].contract.strike == Decimal("79000")
+
+
+def test_directional_regimes_offer_protected_credit_spread_candidates():
+    now = datetime(2026, 11, 27, 5, 0, tzinfo=UTC)
+    items = (
+        _item(21, "80000", Right.CE, "500"),
+        _item(22, "80500", Right.CE, "300"),
+        _item(23, "81000", Right.CE, "200"),
+        _item(24, "80000", Right.PE, "500"),
+        _item(25, "79500", Right.PE, "300"),
+        _item(26, "79000", Right.PE, "200"),
+    )
+    chain = OptionChainSnapshot(
+        Decimal("80000"), now, Decimal("0.06"), items, ()
+    )
+    bull = generate_directional_verticals(
+        chain, regime=Regime.BULL_TREND, lots=1
+    )
+    bull_credit = next(x for x in bull if x.strategy_id == "SENSEX_BULL_PUT_CREDIT")
+    assert bull_credit.net_debit < 0
+    assert bull_credit.max_loss > 0
+    assert bull_credit.max_profit is not None and bull_credit.max_profit > 0
+    assert bull_credit.legs[0].contract.strike == Decimal("79000")
+    assert bull_credit.legs[1].contract.strike == Decimal("79500")
+
+    bear = generate_directional_verticals(
+        chain, regime=Regime.BEAR_TREND, lots=1
+    )
+    bear_credit = next(x for x in bear if x.strategy_id == "SENSEX_BEAR_CALL_CREDIT")
+    assert bear_credit.net_debit < 0
+    assert bear_credit.max_loss > 0
+    assert bear_credit.max_profit is not None and bear_credit.max_profit > 0
+    assert bear_credit.legs[0].contract.strike == Decimal("81000")
+    assert bear_credit.legs[1].contract.strike == Decimal("80500")
