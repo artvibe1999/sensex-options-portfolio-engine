@@ -1,4 +1,6 @@
 import asyncio
+import threading
+import time
 from datetime import datetime
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -125,5 +127,79 @@ def test_monitor_health_callback_failure_does_not_kill_supervisor():
         assert monitor.health.healthy
         assert recovery.calls >= 1
         await monitor.stop()
+
+    asyncio.run(scenario())
+
+
+
+def test_monitor_rebuilds_broker_service_after_failure_and_recovers():
+    async def scenario():
+        changes = []
+        created = []
+
+        def factory():
+            if not created:
+                service = FailedRecovery()
+            else:
+                service = HealthyRecovery()
+            created.append(service)
+            return service
+
+        monitor = KiteBrokerMonitor(
+            recovery_factory=factory,
+            on_health_change=lambda healthy, reason: changes.append((healthy, reason)),
+            poll_interval_seconds=10,
+            stale_after_seconds=30,
+            retry_max_seconds=5,
+        )
+        await monitor.start()
+        for _ in range(300):
+            if any(healthy for healthy, _ in changes):
+                break
+            await asyncio.sleep(0.01)
+        assert len(created) >= 2
+        assert changes[0][0] is False
+        assert any(healthy for healthy, _ in changes)
+        await monitor.stop()
+
+    asyncio.run(scenario())
+
+
+def test_watchdog_fails_closed_when_broker_call_stalls():
+    async def scenario():
+        release = threading.Event()
+        stale_alert = asyncio.Event()
+
+        class StalledRecovery:
+            def recover(self, *, session_date):
+                release.wait(timeout=3)
+                return SimpleNamespace(
+                    recovery_complete=False,
+                    reasons=("broker response timed out",),
+                )
+
+        monitor = None
+
+        async def on_health(healthy, reason):
+            if not healthy and "stale" in reason:
+                stale_alert.set()
+                release.set()
+
+        monitor = KiteBrokerMonitor(
+            recovery_factory=lambda: StalledRecovery(),
+            on_health_change=on_health,
+            poll_interval_seconds=10,
+            stale_after_seconds=20,
+        )
+
+        async def immediate_wait(_seconds):
+            await asyncio.sleep(0)
+
+        monitor._wait_or_stop = immediate_wait
+        await monitor.start()
+        monitor._started_monotonic = time.monotonic() - 30
+        await asyncio.wait_for(stale_alert.wait(), timeout=1)
+        await monitor.stop()
+        assert not monitor.health.healthy
 
     asyncio.run(scenario())
