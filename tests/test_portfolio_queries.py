@@ -121,5 +121,7 @@ def test_accounting_telegram_views_render_reconciled_values(tmp_path):
         accounting=accounting,
     )
     assert "Realised net P&L: 450" in queries.pnl_text()
+    assert "Fees and taxes: 50" in queries.pnl_text()
+    assert "Cash balance: 50450" in queries.capital_text()
     assert "Net liquidation equity: 50450" in queries.capital_text()
     assert "Open defined max loss: 0" in queries.risk_text()
