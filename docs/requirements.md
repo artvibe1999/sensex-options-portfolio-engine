@@ -898,17 +898,17 @@ acceptance conditions are implemented, tested, and verified on the branch. A
 foundation, stub, plan, injectable interface, or paper-only simulation does not
 complete a live requirement. The count below counts IDs, not sub-bullets.
 
-**Register update: PE-01 and PE-02 are COMPLETE. PE-02 was verified on exact head
-1a6585654bad42662d36a45586552371c8322b46 (Ruff passed; pytest 196 passed; 85%
-statement coverage; push CI and PR CI passed). The canonical register now has 15
-pending items.** All are in scope because they map
+**Register update: PE-01, PE-02 and PE-03 are COMPLETE. PE-03 was verified on
+exact implementation head c42131f3de93b49e45fefaea49e93eb127488819 (Ruff passed;
+pytest 205 passed; 85% statement coverage; push CI and PR CI passed). The canonical
+register now has 14 pending or partial items.** All are in scope because they map
 directly to requirements in sections 5–16. No additional feature may be added
 unless it is explicitly required by this document.
 
 | ID | Status | Requirement and completion condition |
 |---|---|---|
 | PE-01 | COMPLETE | **Supervised broker fill acquisition and reconciliation.** Recurring current-session Kite trade-history polling, supervised Telegram lifecycle, adapter recreation/retry, missed-event backfill through the durable inbox, periodic broker reconciliation, watchdog stale/worker-death detection, allowlisted Telegram alerts and fail-closed paper/pause behaviour are implemented and covered by CI at commit f3d973462e3a15ef741c7f24ec2de7355827f0ab. |
-| PE-02 | COMPLETE | **Kite order-placement adapter.** Added a BFO SENSEX-only LIMIT adapter with refreshed-contract/token/symbol checks, whole-lot and tick-aligned price validation, NRML/DAY/regular order policy, deterministic 20-character alphanumeric tag derived from the durable client key, exact same-day order-book lookup bound to persisted order identity, guarded LIMIT modify/cancel, response/status validation, and a conservative per-process request throttle. Kite tags are correlation hints, not broker-side idempotency guarantees; the durable submission boundary never retries uncertain submissions, and missing/ambiguous lookup results remain blocked. Runtime wiring and end-to-end multi-leg execution belong to PE-03/PE-04. Live submission remains disabled by default. |
+| PE-02 | COMPLETE | **Kite order-placement adapter.** Added a BFO SENSEX-only LIMIT adapter with refreshed-contract/token/symbol checks, whole-lot and tick-aligned price validation, NRML/DAY/regular order policy, deterministic 20-character alphanumeric tag derived from the durable client key, exact same-day order-book lookup bound to persisted order identity, guarded LIMIT modify/cancel, response/status validation, and a conservative per-process request throttle. Kite tags are correlation hints, not broker-side idempotency guarantees; the durable submission boundary never retries uncertain submissions, and missing/ambiguous lookup results remain blocked. Runtime wiring and full live-readiness belong to PE-04. Live submission remains disabled by default. |
 | PE-03 | COMPLETE | **Durable live multi-leg execution and recovery.** Implemented in `live_execution.py`: immutable durable LIMIT intents, fill-ledger gating, one-shot broker submission/recovery, confirmed cancel-before-replace, partial/reject/timeout handling, cancel/fill race recovery, short-first residual cleanup and explicit blocked exposure reporting. Coordinator and submission are opt-in and not wired to runtime; PE-04 owns full live-readiness/runtime injection. |
 | PE-04 | PARTIAL | **Complete live-readiness wiring.** Construct and inject real broker-authentication, contract-master, fresh market-data, persistence, reconciliation and portfolio-risk dependencies in the runtime. Every required gate must fail closed; startup recovery alone is insufficient. |
 | PE-05 | NOT STARTED | **Managed emergency close-all.** Implement the specified halt, reconcile, cancel-safe-pending-entry, protect/close structure-aware sequencing, per-leg fill verification, retries only after idempotency/status checks, final flat reconciliation, and explicit residual-exposure reporting. |
