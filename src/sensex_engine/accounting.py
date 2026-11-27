@@ -301,12 +301,22 @@ class PortfolioAccountingService:
                            if e["event_type"] == "ACCOUNT_CASH_FLOW" and e["payload"]["direction"] == "WITHDRAWAL"), Decimal("0"))
         pnl = sum((_decimal(e["payload"]["realized_pnl"], "realized_pnl") - _decimal(e["payload"]["fees"], "fees")
                    for e in events if e["event_type"] == "ACCOUNT_TRADE_RESULT"), Decimal("0"))
+        fees = sum((
+            _decimal(e["payload"]["fees"], "fees")
+            for e in events if e["event_type"] == "ACCOUNT_TRADE_RESULT"
+        ), Decimal("0"))
+        cash_balance = (
+            _decimal(opened["payload"]["amount"], "opening_equity")
+            + deposits - withdrawals + pnl
+        )
         return {
             "currency": self.currency,
             "opening_equity": str(opened["payload"]["amount"]),
             "deposits": str(deposits),
             "withdrawals": str(withdrawals),
             "realized_net_pnl": str(pnl),
+            "fees_and_taxes": str(fees),
+            "cash_balance": str(cash_balance),
             "unrealized_pnl": str(snapshot.daily_unrealized_pnl),
             "net_liquidation_equity": str(snapshot.net_liquidation_equity),
             "available_margin": str(snapshot.available_margin),
