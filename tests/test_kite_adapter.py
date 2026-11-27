@@ -81,3 +81,12 @@ def test_kite_authentication_fails_closed():
 def test_empty_kite_credentials_rejected():
     with pytest.raises(ValueError):
         KiteReadOnlyAdapter.from_credentials("", "token")
+
+def test_contract_refresh_drops_expired_or_removed_symbols():
+    fake = FakeKite()
+    adapter = KiteReadOnlyAdapter(fake)
+    adapter.instruments()
+    fake.rows = []
+    assert adapter.instruments() == []
+    with pytest.raises(ValueError):
+        adapter.quotes([987])
