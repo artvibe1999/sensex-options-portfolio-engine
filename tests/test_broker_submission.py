@@ -1,6 +1,3 @@
-from datetime import UTC, datetime
-from decimal import Decimal
-
 import pytest
 
 from sensex_engine.broker_submission import (
@@ -232,3 +229,43 @@ def test_acknowledgement_is_not_mistaken_for_a_fill(tmp_path):
     assert result.state is OrderState.ACKNOWLEDGED
     assert snapshot["filled_quantity"] == 0
     assert snapshot["remaining_quantity"] == 20
+
+
+
+def test_client_order_key_is_unique_across_durable_intents(tmp_path):
+    lifecycle = make_lifecycle(tmp_path)
+    with pytest.raises(ValueError, match="already assigned"):
+        lifecycle.create_intent(
+            order_id="internal-2",
+            position_id="position-1",
+            leg_index=1,
+            instrument_token=124,
+            tradingsymbol="SENSEX_TEST_PE",
+            side="SELL",
+            quantity=20,
+            order_type="LIMIT",
+            product="NRML",
+            mode="live",
+            idempotency_key="intent-2",
+            client_order_key="sx-test-order-0001",
+        )
+
+
+def test_generated_client_key_is_stable_after_restart(tmp_path):
+    lifecycle = OrderLifecycle(SqliteStore(tmp_path / "generated.sqlite3"))
+    lifecycle.create_intent(
+        order_id="generated-order",
+        position_id="position-1",
+        leg_index=0,
+        instrument_token=123,
+        tradingsymbol="SENSEX_TEST_CE",
+        side="BUY",
+        quantity=20,
+        order_type="LIMIT",
+        product="NRML",
+        mode="live",
+        idempotency_key="generated-intent",
+    )
+    original_key = lifecycle.snapshot("generated-order")["client_order_key"]
+    restarted = OrderLifecycle(SqliteStore(tmp_path / "generated.sqlite3"))
+    assert restarted.snapshot("generated-order")["client_order_key"] == original_key
