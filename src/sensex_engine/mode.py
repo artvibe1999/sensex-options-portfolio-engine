@@ -1,6 +1,6 @@
 """Runtime mode state. Process restart always resets to paper."""
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from .domain import TradingMode
 
@@ -18,14 +18,21 @@ class ModeController:
         self.live_requested_by = user_id
         self.live_confirmed_by = None
 
-    def confirm_live(self, user_id: int, *, authorized: bool, broker_ready: bool, risk_clear: bool) -> None:
+    def confirm_live(
+        self,
+        user_id: int,
+        *,
+        authorized: bool,
+        broker_ready: bool,
+        risk_clear: bool,
+    ) -> None:
         if not authorized or self.live_requested_by != user_id:
             raise PermissionError("Live confirmation must match the authorized requester")
         if not broker_ready or not risk_clear:
             raise RuntimeError("Live activation checks failed")
         self.mode = TradingMode.LIVE
         self.live_confirmed_by = user_id
-        self.live_activated_at = datetime.now(timezone.utc)
+        self.live_activated_at = datetime.now(UTC)
 
     def force_paper(self) -> None:
         self.mode = TradingMode.PAPER

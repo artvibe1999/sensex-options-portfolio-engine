@@ -32,7 +32,9 @@ class RiskEngine:
         contracts_are_current: bool,
         broker_reconciled: bool,
     ) -> RiskDecision:
-        reject = lambda reason: RiskDecision(False, reason)
+        def reject(reason: str) -> RiskDecision:
+            return RiskDecision(False, reason)
+
         equity = portfolio.net_liquidation_equity
         if equity <= 0:
             return reject("Net liquidation equity is not positive")
@@ -73,5 +75,9 @@ class RiskEngine:
         aggregate_cap = equity * self.limits.max_aggregate_open_risk_pct
         remaining = aggregate_cap - portfolio.open_max_loss
         if candidate.max_loss + candidate.estimated_costs > remaining:
-            return RiskDecision(False, "Candidate exceeds aggregate open-risk budget", max(remaining, Decimal("0")))
+            return RiskDecision(
+                False,
+                "Candidate exceeds aggregate open-risk budget",
+                max(remaining, Decimal("0")),
+            )
         return RiskDecision(True, "Approved by pre-trade risk checks", per_trade_cap)

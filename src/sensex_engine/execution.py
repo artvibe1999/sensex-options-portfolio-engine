@@ -5,7 +5,7 @@ from enum import StrEnum
 from typing import Protocol
 from uuid import UUID, uuid4
 
-from .domain import OptionLeg, Position, TradingMode
+from .domain import Position, TradingMode
 
 
 class OrderStatus(StrEnum):
@@ -46,7 +46,8 @@ class PaperExecutionAdapter:
         results: list[OrderResult] = []
         for leg in position.legs:
             order_id = str(uuid4())
-            result = OrderResult(order_id, OrderStatus.ACCEPTED, 0, None, "Paper order queued")
+            message = f"Paper order queued for {leg.contract.tradingsymbol}"
+            result = OrderResult(order_id, OrderStatus.ACCEPTED, 0, None, message)
             self.orders[order_id] = result
             results.append(result)
         return results

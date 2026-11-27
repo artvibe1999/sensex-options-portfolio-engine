@@ -1,15 +1,57 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
 
 from sensex_engine.config import Settings
 from sensex_engine.domain import (
-    Contract, OptionLeg, PortfolioSnapshot, Regime, Right, Side, StrategyCandidate, TradingMode
+    Contract,
+    OptionLeg,
+    PortfolioSnapshot,
+    Regime,
+    Right,
+    Side,
+    StrategyCandidate,
+    TradingMode,
+    Position,
 )
+from sensex_engine.eligibility import regime_eligibility
 from sensex_engine.execution import PaperExecutionAdapter
 from sensex_engine.mode import ModeController
-from sensex_engine.risk import RiskEngine, RiskLimits
+from sensex_engine.risk import RiskEngine
+
+
+def make_candidate() -> StrategyCandidate:
+    contract = Contract(
+        "SENSEXTEST",
+        1,
+        datetime.now(UTC),
+        Decimal("80000"),
+        Right.CE,
+        20,
+        Decimal("0.05"),
+    )
+    return StrategyCandidate(
+        "bull-call-spread",
+        Regime.BULL_TREND,
+        (OptionLeg(contract, Side.BUY, 1),),
+        Decimal("300"),
+        Decimal("700"),
+        Decimal("300"),
+        Decimal("10"),
+        datetime.now(UTC),
+        True,
+    )
+
+
+def make_portfolio() -> PortfolioSnapshot:
+    return PortfolioSnapshot(
+        net_liquidation_equity=Decimal("50000"),
+        available_margin=Decimal("20000"),
+        open_max_loss=Decimal("0"),
+        daily_realized_pnl=Decimal("0"),
+        daily_unrealized_pnl=Decimal("0"),
+    )
 
 
 def test_environment_cannot_boot_live():
@@ -31,28 +73,51 @@ def test_live_mode_requires_request_and_matching_confirmation():
 
 def test_paper_adapter_rejects_live_position():
     adapter = PaperExecutionAdapter()
-    contract = Contract("SENSEXTEST", 1, datetime.now(timezone.utc), Decimal("80000"),
-                        Right.CE, 20, Decimal("0.05"))
-    position = __import__("sensex_engine.domain", fromlist=["Position"]).Position.create(
-        "test", (OptionLeg(contract, Side.BUY, 1),), TradingMode.LIVE
+    position = Position.create(
+        "test",
+        make_candidate().legs,
+        TradingMode.LIVE,
     )
     with pytest.raises(ValueError):
         adapter.submit(position)
 
 
 def test_risk_engine_rejects_stale_data():
-    candidate = StrategyCandidate(
-        "bull-call-spread", Regime.BULL_TREND, (), Decimal("300"), Decimal("700"),
-        Decimal("300"), Decimal("10"), datetime.now(timezone.utc), True
-    ) if False else None
-    # An invalid/empty candidate cannot be constructed; this test checks fail-closed
-    # market-quality policy through eligibility instead.
-    from sensex_engine.eligibility import regime_eligibility
-    assert not regime_eligibility(Regime.BULL_TREND, chain_valid=False, liquidity_ok=True).allowed
+    decision = RiskEngine().evaluate(
+        make_candidate(),
+        make_portfolio(),
+        estimated_margin=Decimal("1000"),
+        data_is_fresh=False,
+        contracts_are_current=True,
+        broker_reconciled=True,
+    )
+    assert not decision.approved
+    assert decision.reason == "Market data is stale or unavailable"
+
+
+def test_risk_engine_approves_candidate_inside_limits():
+    decision = RiskEngine().evaluate(
+        make_candidate(),
+        make_portfolio(),
+        estimated_margin=Decimal("1000"),
+        data_is_fresh=True,
+        contracts_are_current=True,
+        broker_reconciled=True,
+    )
+    assert decision.approved
+
+
+def test_uncertain_regime_is_no_trade():
+    assert not regime_eligibility(
+        Regime.TRANSITION,
+        chain_valid=True,
+        liquidity_ok=True,
+    ).allowed
 
 
 def test_allowlist_requires_both_user_and_chat():
     from sensex_engine.telegram_auth import TelegramAllowlist
+
     allow = TelegramAllowlist(frozenset({1}), frozenset({10}))
     assert allow.allows(1, 10)
     assert not allow.allows(1, 11)
