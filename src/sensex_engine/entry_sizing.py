@@ -40,6 +40,7 @@ class EntrySizingService:
         quotes = self.broker.quotes(list(leg.contract.instrument_token for leg in candidate.legs))
         prices = {}
         quote_times = []
+        liquidity_lots = max_lots
         for leg in candidate.legs:
             token = leg.contract.instrument_token
             quote = quotes[token]
@@ -47,6 +48,8 @@ class EntrySizingService:
                 raise ValueError("Candidate quote is unavailable or stale")
             prices[token] = quote.ask if leg.side is Side.BUY else quote.bid
             quote_times.append(quote.timestamp)
+            depth = quote.ask_quantity if leg.side is Side.BUY else quote.bid_quantity
+            liquidity_lots = min(liquidity_lots, depth // leg.contract.lot_size)
         if max(quote_times) - min(quote_times) > timedelta(seconds=2):
             raise ValueError("Candidate quotes are not aligned")
         one = calculate_expiry_payoff(candidate.legs, prices)
@@ -64,12 +67,16 @@ class EntrySizingService:
             snapshot.net_liquidation_equity * allocation_pct,
             snapshot.net_liquidation_equity * limits.max_margin_utilization_pct,
         )
+        family_remaining = (
+            snapshot.net_liquidation_equity * limits.max_strategy_risk_pct
+            - dict(snapshot.strategy_open_risk).get(candidate.strategy_id, Decimal("0"))
+        )
         lots = affordable_lots(
-            risk_budget=min(budget.max_trade_risk,
+            risk_budget=min(budget.max_trade_risk, family_remaining,
                             budget.max_aggregate_risk - snapshot.open_max_loss),
             max_loss_per_lot=one.max_loss,
             estimated_cost_per_lot=candidate.estimated_costs,
-            available_margin=cap, margin_per_lot=margin_one, max_lots=max_lots,
+            available_margin=cap, margin_per_lot=margin_one, max_lots=liquidity_lots,
         )
         while lots:
             legs = tuple(replace(leg, lots=lots) for leg in candidate.legs)
