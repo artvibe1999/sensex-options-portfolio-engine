@@ -129,3 +129,14 @@ This is a read-only safety service. It does not cancel orders, modify positions,
 or execute closes. Until order intents and fills are durably tracked and a
 broker-backed execution state machine is implemented, pending orders keep the
 portfolio unreconciled and new entries must remain disabled.
+
+
+Broker fill ingestion now uses a durable SQLite inbox. Each broker-order/trade identity
+and its normalized payload are committed before order/position projections are changed.
+Conflicting payload reuse is rejected. Receipts move through RECEIVED, PROCESSING and
+PROCESSED states; processing claims use a bounded lease so an abandoned PROCESSING
+receipt can be reclaimed after a crash. Failed projections return the receipt to
+RECEIVED. The order ledger remains the first fill fact and the position projection
+is replayed idempotently, allowing recovery after interruption between the two writes.
+This inbox is not a broker event transport: a future Kite adapter must still provide
+reliable event acquisition, reconnect/backfill, and reconciliation for missed events.
