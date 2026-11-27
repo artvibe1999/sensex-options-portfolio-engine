@@ -116,6 +116,14 @@ class KiteTradeHistoryIngestor:
                 results.append(self._ingestion.ingest(event))
         return results
 
+    def recover_pending(self):
+        """Replay durable fill receipts before execution or reconciliation advances."""
+        return self._ingestion.recover_pending()
+
+    def has_pending_receipts(self) -> bool:
+        """Expose failed/in-flight fill projection receipts to execution gates."""
+        return self._ingestion.has_pending_receipts()
+
     def _resolve_phase(self, order: dict[str, Any]) -> str:
         position = self._positions.snapshot(str(order["position_id"]))
         if position is None:
