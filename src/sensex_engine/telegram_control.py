@@ -14,6 +14,7 @@ class OperationsController:
     portfolio_queries: Any | None = None
     startup_recovery_complete: bool = False
     emergency_close_all: Any | None = None
+    emergency_active: bool = False
 
     def handle(
         self,
@@ -27,6 +28,10 @@ class OperationsController:
         if not self.allowlist.allows(user_id, chat_id):
             raise PermissionError("Telegram user/chat is not authorized")
         normalized = command.strip().split()[0].lower() if command.strip() else ""
+        if self.emergency_active and normalized in {"/live", "/confirm_live", "/resume"}:
+            raise RuntimeError(
+                "Emergency close-all is in progress; entries remain halted in paper mode"
+            )
         if normalized == "/status":
             pending = self.mode.live_requested_by is not None
             return (
