@@ -7,7 +7,7 @@ from decimal import Decimal
 from typing import Any
 from zoneinfo import ZoneInfo
 
-from .domain import Contract, Right
+from .domain import Contract, OptionLeg, Right
 from .market_data import Quote
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -124,6 +124,31 @@ class KiteReadOnlyAdapter:
         result = self._client.margins(segment)
         if not isinstance(result, dict):
             raise ValueError("Kite margin response must be an object")
+        return result
+
+    def basket_margin(
+        self, legs: tuple[OptionLeg, ...], prices: dict[int, Decimal],
+    ) -> Decimal:
+        """Use the broker's initial and final basket requirements."""
+        orders = [
+            {
+                "exchange": "BFO", "tradingsymbol": leg.contract.tradingsymbol,
+                "transaction_type": leg.side.value, "variety": "regular",
+                "product": "NRML", "order_type": "LIMIT",
+                "quantity": leg.lots * leg.contract.lot_size,
+                "price": float(prices[leg.contract.instrument_token]),
+                "trigger_price": 0,
+            }
+            for leg in sorted(legs, key=lambda x: x.side.value != "BUY")
+        ]
+        response = self._client.basket_order_margins(orders, consider_positions=True)
+        initial = Decimal(str(response["initial"]["total"]))
+        final = Decimal(str(response["final"]["total"]))
+        if not all(x.is_finite() and x >= 0 for x in (initial, final)):
+            raise ValueError("Invalid Kite basket margin")
+        result = max(initial, final)
+        if result <= 0:
+            raise ValueError("Positive basket margin is required")
         return result
 
     def positions(self) -> dict[str, Any]:
