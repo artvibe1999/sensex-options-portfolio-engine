@@ -229,7 +229,10 @@ def build_application_from_settings(
     )
     use_default_snapshot = portfolio_snapshot_provider is None
     if use_default_snapshot:
-        portfolio_snapshot_provider = lambda: None
+        def unavailable_snapshot() -> None:
+            return None
+
+        portfolio_snapshot_provider = unavailable_snapshot
     operations = operations_from_settings(settings, portfolio_queries=portfolio_queries)
     operations.mode.force_paper()
     operations.paused = True
