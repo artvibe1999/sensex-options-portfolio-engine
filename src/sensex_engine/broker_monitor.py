@@ -56,6 +56,7 @@ class KiteBrokerMonitor:
         poll_interval_seconds: int = 30,
         stale_after_seconds: int = 120,
         retry_max_seconds: int = 30,
+        after_recovery: Callable[[], Any] | None = None,
     ) -> None:
         if poll_interval_seconds < 10:
             raise ValueError("poll_interval_seconds must be at least 10")
@@ -64,6 +65,7 @@ class KiteBrokerMonitor:
         if retry_max_seconds < 5:
             raise ValueError("retry_max_seconds must be at least 5")
         self._recovery_factory = recovery_factory
+        self._after_recovery = after_recovery
         self._on_health_change = on_health_change
         self._poll_interval = poll_interval_seconds
         self._stale_after = stale_after_seconds
@@ -138,6 +140,9 @@ class KiteBrokerMonitor:
                     if not getattr(result, "recovery_complete", False):
                         reasons = getattr(result, "reasons", ()) or ("recovery did not complete",)
                         raise _RecoveryIncompleteError("; ".join(str(reason) for reason in reasons))
+                    if self._after_recovery is not None:
+                        if await asyncio.to_thread(self._after_recovery) is None:
+                            raise _RecoveryIncompleteError("Account refresh unavailable")
                     self._last_success_monotonic = time.monotonic()
                     self._last_success_at = datetime.now(IST)
                     self._last_error = None
