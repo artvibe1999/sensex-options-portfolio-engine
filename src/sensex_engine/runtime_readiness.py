@@ -205,7 +205,7 @@ def build_kite_live_readiness_service(
         ]
         by_right = {item.right: item for item in pair}
         if Right.CE not in by_right or Right.PE not in by_right:
-            raise RuntimeError("Fresh paired CE/PE contracts are unavailable for readiness")
+            raise ValueError("Fresh paired CE/PE contracts are unavailable for readiness")
         quotes = broker.quotes([
             by_right[Right.CE].instrument_token,
             by_right[Right.PE].instrument_token,
