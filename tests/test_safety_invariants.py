@@ -16,7 +16,11 @@ from sensex_engine.domain import (
     TradingMode,
 )
 from sensex_engine.eligibility import regime_eligibility
-from sensex_engine.execution import PaperExecutionAdapter
+from sensex_engine.execution import (
+    ExecutionPhase,
+    PaperExecutionAdapter,
+    build_leg_execution_plan,
+)
 from sensex_engine.mode import ModeController
 from sensex_engine.risk import RiskEngine
 
@@ -158,3 +162,53 @@ def test_risk_engine_rejects_unvalidated_volatility_expansion_strategy():
     )
     assert not decision.approved
     assert "separately validated" in decision.reason
+
+
+
+def test_protective_leg_plan_opens_longs_before_short_legs_and_closes_short_first():
+    long_contract = Contract(
+        "SENSEX_LONG", 101, datetime.now(UTC), Decimal("80000"),
+        Right.CE, 20, Decimal("0.05"),
+    )
+    short_contract = Contract(
+        "SENSEX_SHORT", 102, datetime.now(UTC), Decimal("80200"),
+        Right.CE, 20, Decimal("0.05"),
+    )
+    # Deliberately put the short leg first to prove the planner controls ordering.
+    position = Position.create(
+        "bull-call-debit",
+        (
+            OptionLeg(short_contract, Side.SELL, 2),
+            OptionLeg(long_contract, Side.BUY, 1),
+        ),
+        TradingMode.PAPER,
+    )
+
+    opening = build_leg_execution_plan(position, ExecutionPhase.OPEN)
+    assert [(item.leg_index, item.side, item.quantity) for item in opening] == [
+        (1, "BUY", 20),
+        (0, "SELL", 40),
+    ]
+
+    closing = build_leg_execution_plan(position, ExecutionPhase.CLOSE)
+    assert [(item.leg_index, item.side, item.quantity) for item in closing] == [
+        (0, "BUY", 40),
+        (1, "SELL", 20),
+    ]
+
+
+def test_execution_plan_rejects_duplicate_contract_legs():
+    contract = Contract(
+        "SENSEX_DUP", 201, datetime.now(UTC), Decimal("80000"),
+        Right.PE, 20, Decimal("0.05"),
+    )
+    position = Position.create(
+        "invalid-duplicate",
+        (
+            OptionLeg(contract, Side.BUY, 1),
+            OptionLeg(contract, Side.SELL, 1),
+        ),
+        TradingMode.PAPER,
+    )
+    with pytest.raises(ValueError, match="duplicate"):
+        build_leg_execution_plan(position, ExecutionPhase.OPEN)
