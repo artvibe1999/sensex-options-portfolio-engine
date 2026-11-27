@@ -24,10 +24,13 @@ def make_service(
 ):
     now = datetime.now(UTC)
     contract = SimpleNamespace(instrument_token=1, tradingsymbol="SENSEX80000CE", lot_size=1)
-    lifecycle = PositionLifecycle(SqliteStore(tmp_path / "readiness.sqlite3"))
+    store = SqliteStore(tmp_path / "readiness.sqlite3")
+    lifecycle = PositionLifecycle(store)
+    orders = OrderLifecycle(store)
     return LiveReadinessService(
         broker=FakeBroker(),
         position_lifecycle=lifecycle,
+        order_lifecycle=orders,
         contracts_provider=lambda: ([contract], now - contract_age),
         market_data_timestamp_provider=lambda: now - market_age,
         risk_clearance_provider=lambda: risk,
