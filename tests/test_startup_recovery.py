@@ -35,12 +35,15 @@ class FakeFillIngestion:
 
 
 class FakeTradeHistory:
-    def __init__(self, result=None):
+    def __init__(self, result=None, error=None):
         self.result = list(result or [])
+        self.error = error
         self.sessions = []
 
     def poll_current_session(self, *, session_date):
         self.sessions.append(session_date)
+        if self.error:
+            raise self.error
         return self.result
 
 
@@ -65,6 +68,23 @@ def make_service(tmp_path, *, contracts=None, receipt_result=None, fill_result=N
         trade_history=history,
     )
     return service, ingestion, history
+
+
+def test_startup_recovery_preserves_completed_receipt_count_on_poll_failure(tmp_path):
+    service, ingestion, history = make_service(
+        tmp_path, receipt_result=["receipt-1"]
+    )
+    history.error = RuntimeError("Kite API unavailable")
+
+    result = service.recover(session_date=current_ist_date())
+
+    assert not result.ready
+    assert result.recovered_receipts == 1
+    assert result.backfilled_fills == 0
+    assert result.reconciliation is None
+    assert result.reasons == ("Startup recovery failed: RuntimeError",)
+    assert ingestion.calls == 1
+    assert history.sessions == [current_ist_date()]
 
 
 def current_ist_date():
