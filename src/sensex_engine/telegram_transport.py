@@ -80,17 +80,21 @@ async def dispatch_command(
                 raise PermissionError("Telegram user/chat is not authorized")
             operations.paused = True
             operations.mode.force_paper()
-            emergency = operations.emergency_close_all
-            if emergency is None:
-                response = (
-                    "Emergency halt applied: entries are paused and mode is PAPER. "
-                    "Kite emergency execution is unavailable; no broker order was sent."
-                )
-                outcome = "BLOCKED"
-            else:
-                report = await asyncio.to_thread(emergency.execute)
-                response = report.to_text()
-                outcome = "ACCEPTED" if report.completed else "INCOMPLETE"
+            operations.emergency_active = True
+            try:
+                emergency = operations.emergency_close_all
+                if emergency is None:
+                    response = (
+                        "Emergency halt applied: entries are paused and mode is PAPER. "
+                        "Kite emergency execution is unavailable; no broker order was sent."
+                    )
+                    outcome = "BLOCKED"
+                else:
+                    report = await asyncio.to_thread(emergency.execute)
+                    response = report.to_text()
+                    outcome = "ACCEPTED" if report.completed else "INCOMPLETE"
+            finally:
+                operations.emergency_active = False
         else:
             response = operations.handle(
                 command,
