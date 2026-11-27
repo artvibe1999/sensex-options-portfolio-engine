@@ -11,6 +11,9 @@ class Settings(BaseSettings):
     app_env: str = "development"
     log_level: str = "INFO"
     database_url: str = "sqlite:///./portfolio.db"
+    telegram_bot_token: str = ""
+    telegram_allowed_user_ids: str = ""
+    telegram_allowed_chat_ids: str = ""
 
     # Environment configuration can never silently boot the process into live mode.
     trading_mode: Literal["paper", "live"] = "paper"
