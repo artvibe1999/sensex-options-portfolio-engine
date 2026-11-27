@@ -117,7 +117,8 @@ class PortfolioAccountingService:
     def record_reconciled_mark(
         self, *, broker_net_equity: Decimal, unrealized_pnl: Decimal,
         available_margin: Decimal, open_max_loss: Decimal, open_positions: int,
-        entries_today: int, reconciliation_id: str,\n        reconciliation_report: ReconciliationReport,
+        entries_today: int, reconciliation_id: str,
+        reconciliation_report: ReconciliationReport,
         marked_at: datetime | None = None,
     ) -> bool:
         values = {
