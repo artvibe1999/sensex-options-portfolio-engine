@@ -46,7 +46,11 @@ class FillCoordinator:
             (item for item in position["legs"] if int(item["leg_index"]) == leg_index),
             None,
         )
-        if leg is None or int(leg["instrument_token"]) != int(order["instrument_token"]):
+        if (
+            leg is None
+            or int(leg["instrument_token"]) != int(order["instrument_token"])
+            or str(leg["tradingsymbol"]) != str(order["tradingsymbol"])
+        ):
             raise ValueError("Order contract does not match its position leg")
         normalized_phase = phase.upper()
         if normalized_phase not in {"OPEN", "CLOSE"}:
