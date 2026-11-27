@@ -324,6 +324,18 @@ class SqliteStore:
             )
             return cursor.rowcount == 1
 
+    def aggregate_ids_for_event(self, event_type: str) -> list[str]:
+        """List unique aggregate IDs created by a given event type."""
+        if not event_type.strip():
+            raise ValueError("Event type is required")
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT DISTINCT aggregate_id FROM portfolio_events "
+                "WHERE event_type = ? ORDER BY aggregate_id",
+                (event_type,),
+            ).fetchall()
+        return [str(row["aggregate_id"]) for row in rows]
+
     def events_for(self, aggregate_id: str) -> list[dict[str, Any]]:
         with self._connection() as connection:
             rows = connection.execute(
