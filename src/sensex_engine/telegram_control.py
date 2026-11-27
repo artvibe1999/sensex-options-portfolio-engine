@@ -32,7 +32,7 @@ class OperationsController:
             return "Paper mode active; entries remain paused until /resume."
         if normalized == "/live":
             self.mode.request_live(user_id, authorized=True)
-            return "Live activation requested. Send /confirm_live separately after reviewing status."
+            return (\n                "Live activation requested. Send /confirm_live separately " \n                "after reviewing status."\n            )
         if normalized == "/confirm_live":
             if self.paused:
                 raise RuntimeError("Resume checks must pass before live activation")
@@ -52,7 +52,7 @@ class OperationsController:
             self.paused = False
             return "Entries resumed after readiness checks."
         if normalized in {"/positions", "/orders", "/pnl", "/capital", "/risk", "/strategies"}:
-            raise NotImplementedError("Read-only portfolio query requires the persistence and broker services.")
+            raise NotImplementedError(\n                "Read-only portfolio query requires the persistence and broker services."\n            )
         if normalized in {"/close", "/closeall", "/emergency"}:
-            raise NotImplementedError("Position closure is disabled until reconciled execution workflows exist.")
+            raise NotImplementedError(\n                "Position closure is disabled until reconciled execution workflows exist."\n            )
         raise ValueError("Unknown command. Use /help.")
