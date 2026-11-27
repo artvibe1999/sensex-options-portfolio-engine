@@ -3,7 +3,6 @@ from dataclasses import dataclass
 from decimal import Decimal
 
 from .domain import OptionLeg, Side
-from .market_data import Quote
 
 
 @dataclass(frozen=True)
