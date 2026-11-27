@@ -7,7 +7,8 @@ from .domain import Contract, Position, Side
 
 
 ACTIVE_ORDER_STATUSES = frozenset({
-    "OPEN", "OPEN PENDING", "VALIDATION PENDING", "PUT ORDER REQ RECEIVED",
+    "OPEN", "PENDING", "PARTIALLY FILLED", "OPEN PENDING",
+    "VALIDATION PENDING", "PUT ORDER REQ RECEIVED",
     "TRIGGER PENDING", "AMO REQ RECEIVED", "MODIFY PENDING",
     "MODIFY VALIDATION PENDING", "CANCEL PENDING",
 })
@@ -22,19 +23,25 @@ class ReconciliationReport:
     pending_order_ids: tuple[str, ...]
 
 
-def _expected_quantities(positions: list[Position]) -> dict[int, int]:
+def _expected_quantities(
+    positions: list[Position],
+) -> tuple[dict[int, int], list[str]]:
     expected: dict[int, int] = {}
+    issues: list[str] = []
     for position in positions:
         if position.status == "CLOSED":
             continue
         if position.status == "ERROR":
-            raise ValueError(f"Internal position {position.position_id} is in ERROR state")
+            issues.append(f"Internal position {position.position_id} is in ERROR state")
         for leg in position.legs:
             quantity = leg.contract.lot_size * leg.lots
             signed = quantity if leg.side is Side.BUY else -quantity
             token = leg.contract.instrument_token
             expected[token] = expected.get(token, 0) + signed
-    return {token: quantity for token, quantity in expected.items() if quantity}
+    return (
+        {token: quantity for token, quantity in expected.items() if quantity},
+        issues,
+    )
 
 
 def reconcile_snapshots(
@@ -49,8 +56,7 @@ def reconcile_snapshots(
     Any unknown non-zero broker position, quantity mismatch, malformed response,
     or pending broker order prevents a reconciled=True result.
     """
-    issues: list[str] = []
-    expected = _expected_quantities(internal_positions)
+    expected, issues = _expected_quantities(internal_positions)
     token_by_symbol: dict[str, int] = {}
     for contract in contracts:
         if contract.instrument_token in {value for value in token_by_symbol.values()}:
