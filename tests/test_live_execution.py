@@ -175,6 +175,7 @@ def test_partial_second_leg_is_cancelled_then_residual_is_flattened_short_first(
         (item["order_id"], item["state"], item.get("cancel_confirmed"),
          item.get("last_message"))
         for item in orders.all_snapshots()
+        if item["state"] != OrderState.FILLED.value
     ]
     assert not report.blocked, (report, debug_orders, broker.cancel_calls)
     assert report.residual_exposure == ()
