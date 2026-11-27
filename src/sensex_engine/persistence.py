@@ -132,6 +132,56 @@ class SqliteStore:
             connection.close()
 
 
+    def append_account_event(
+        self,
+        *,
+        idempotency_key: str,
+        event_type: str,
+        aggregate_id: str,
+        payload: dict[str, Any],
+    ) -> bool:
+        """Atomically append account events and enforce a single opening baseline."""
+        if not idempotency_key.strip() or not event_type.strip() or not aggregate_id.strip():
+            raise ValueError("Account event identity fields are required")
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            prior = connection.execute(
+                "SELECT event_type, aggregate_id, payload_json FROM portfolio_events "
+                "WHERE idempotency_key = ?", (idempotency_key,),
+            ).fetchone()
+            if prior is not None:
+                if (
+                    prior["event_type"] != event_type
+                    or prior["aggregate_id"] != aggregate_id
+                    or prior["payload_json"] != encoded
+                ):
+                    raise ValueError("Account event idempotency key conflicts with an existing event")
+                connection.commit()
+                return False
+            if event_type == "ACCOUNT_OPENED":
+                exists = connection.execute(
+                    "SELECT 1 FROM portfolio_events WHERE aggregate_id = ? "
+                    "AND event_type = 'ACCOUNT_OPENED' LIMIT 1",
+                    (aggregate_id,),
+                ).fetchone()
+                if exists is not None:
+                    raise ValueError("Opening equity is immutable once the account ledger is opened")
+            connection.execute(
+                "INSERT INTO portfolio_events "
+                "(idempotency_key, event_type, aggregate_id, payload_json, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (idempotency_key, event_type, aggregate_id, encoded, datetime.now(UTC).isoformat()),
+            )
+            connection.commit()
+            return True
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
     def append_order_event(
         self,
         *,
