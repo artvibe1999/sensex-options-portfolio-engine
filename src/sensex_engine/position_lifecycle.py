@@ -154,10 +154,12 @@ class PositionLifecycle:
                 status="CLOSING",
                 update_id=f"{update_id}:closing",
             )
-        return self.transition(
-            position_id=position_id,
-            status="CLOSED",
-            update_id=f"{update_id}:closed",
+        return self.store.append_position_event(
+            idempotency_key=f"position-update:{position_id}:{update_id}:closed",
+            event_type="POSITION_STATUS_CHANGED",
+            aggregate_id=position_id,
+            expected_status="CLOSING",
+            payload={"position_id": position_id, "status": "CLOSED", "flat_finalization": True},
         )
 
     def snapshot(self, position_id: str) -> dict[str, Any] | None:
