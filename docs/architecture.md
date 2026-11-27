@@ -28,7 +28,7 @@ Backtesting/research tooling is intentionally excluded from this production repo
 
 The read-only option-chain builder joins the current BFO SENSEX contract master to
 Kite quotes by instrument token. It excludes stale, missing, crossed, wide-spread,
-shallow, expired, or unpriceable contracts and records a rejection reason.
+shallow, zero-volume, off-tick, expired, or unpriceable contracts and records a rejection reason.
 
 Implied volatility and Greeks are Black–Scholes estimates computed from the
 bid/ask midpoint, an explicitly supplied SENSEX index price and timestamp, and an
