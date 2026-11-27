@@ -212,7 +212,11 @@ def build_application_from_settings(
     order_execution_adapter = None
     live_readiness_service = None
     if readiness_provider is None:
-        readiness_provider = lambda: (False, False)
+        def deny_readiness() -> tuple[bool, bool]:
+            return False, False
+
+        readiness_provider = deny_readiness
+
         def secret_value(value: Any) -> str:
             getter = getattr(value, "get_secret_value", None)
             raw = getter() if callable(getter) else value
