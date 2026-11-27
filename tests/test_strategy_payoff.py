@@ -78,3 +78,33 @@ def test_payoff_rejects_net_short_call_unbounded_risk():
         assert "unbounded upside risk" in str(exc)
     else:
         raise AssertionError("net short call must fail defined-risk validation")
+
+
+def test_directional_selector_uses_strike_beyond_selected_long_leg():
+    expiry = datetime(2026, 12, 31, tzinfo=UTC)
+    now = datetime(2026, 11, 27, 5, 0, tzinfo=UTC)
+    items = (
+        _item(11, "80200", Right.CE, "450"),
+        _item(12, "80500", Right.CE, "250"),
+        _item(13, "79500", Right.PE, "450"),
+        _item(14, "79000", Right.PE, "250"),
+    )
+    chain = OptionChainSnapshot(
+        Decimal("80180"), now, Decimal("0.06"), items, ()
+    )
+    bull = generate_directional_verticals(
+        chain, regime=Regime.BULL_TREND, lots=1
+    )
+    assert bull
+    assert bull[0].legs[0].contract.strike == Decimal("80200")
+    assert bull[0].legs[1].contract.strike == Decimal("80500")
+
+    put_chain = OptionChainSnapshot(
+        Decimal("79820"), now, Decimal("0.06"), items, ()
+    )
+    bear = generate_directional_verticals(
+        put_chain, regime=Regime.BEAR_TREND, lots=1
+    )
+    assert bear
+    assert bear[0].legs[0].contract.strike == Decimal("79500")
+    assert bear[0].legs[1].contract.strike == Decimal("79000")
