@@ -43,6 +43,64 @@ class BrokerFillIngestionService:
 
     def ingest(self, event: BrokerFillEvent) -> FillIngestionResult:
         self._validate(event)
+        event_key = f"{event.broker_order_id}:{event.broker_trade_id}"
+        store = self._coordinator.orders.store
+        payload = {
+            "broker_order_id": event.broker_order_id,
+            "broker_trade_id": event.broker_trade_id,
+            "instrument_token": event.instrument_token,
+            "tradingsymbol": event.tradingsymbol,
+            "side": event.side.upper(),
+            "quantity": event.quantity,
+            "price": str(Decimal(event.price)),
+            "filled_at": event.filled_at,
+            "phase": event.phase.upper(),
+        }
+        store.receive_broker_fill(event_key=event_key, payload=payload)
+        claim = store.claim_broker_fill(event_key=event_key)
+        if claim is None:
+            receipt = store.broker_fill_receipt(event_key)
+            if receipt is not None and receipt["status"] == "PROCESSED":
+                return FillIngestionResult(**receipt["result"])
+            raise RuntimeError("Broker fill receipt is already being processed")
+        try:
+            result = self._apply(event)
+            result_data = {
+                "internal_order_id": result.internal_order_id,
+                "broker_order_id": result.broker_order_id,
+                "broker_trade_id": result.broker_trade_id,
+                "order_event_created": result.order_event_created,
+                "position_event_created": result.position_event_created,
+                "order_state": result.order_state,
+                "position_status": result.position_status,
+            }
+            store.complete_broker_fill(event_key=event_key, result=result_data)
+            return result
+        except Exception as exc:
+            store.fail_broker_fill(event_key=event_key, error=str(exc))
+            raise
+
+    def recover_pending(self, *, limit: int = 100) -> list[FillIngestionResult]:
+        """Replay unprocessed durable receipts after restart or transient failure."""
+        store = self._coordinator.orders.store
+        recovered: list[FillIngestionResult] = []
+        for receipt in store.pending_broker_fills(limit=limit):
+            payload = receipt["payload"]
+            event = BrokerFillEvent(
+                broker_order_id=payload["broker_order_id"],
+                broker_trade_id=payload["broker_trade_id"],
+                instrument_token=int(payload["instrument_token"]),
+                tradingsymbol=payload["tradingsymbol"],
+                side=payload["side"],
+                quantity=int(payload["quantity"]),
+                price=Decimal(payload["price"]),
+                filled_at=payload["filled_at"],
+                phase=payload["phase"],
+            )
+            recovered.append(self.ingest(event))
+        return recovered
+
+    def _apply(self, event: BrokerFillEvent) -> FillIngestionResult:
         matches = [
             snapshot
             for snapshot in self._coordinator.orders.all_snapshots()
@@ -59,9 +117,6 @@ class BrokerFillIngestionService:
             or str(order["side"]).upper() != event.side.upper()
         ):
             raise ValueError("Broker fill contract or side does not match durable order intent")
-
-        # Include the broker order ID in the local key so trade IDs from different
-        # broker orders cannot collide in the internal order/position event stores.
         fill_key = f"{event.broker_order_id}:{event.broker_trade_id}"
         result = self._coordinator.record_fill(
             order_id=str(order["order_id"]),
