@@ -190,20 +190,40 @@ class PortfolioAccountingService:
         broker_equity = _decimal(mark["broker_net_equity"], "broker_net_equity")
         if abs(equity - broker_equity) > Decimal("1.00"):
             return None
+        cash_flow_rows = [
+            (datetime.fromisoformat(e["payload"]["occurred_at"]).astimezone(UTC),
+             (Decimal("1") if e["payload"]["direction"] == "DEPOSIT" else Decimal("-1"))
+             * _decimal(e["payload"]["amount"], "cash_flow"))
+            for e in events if e["event_type"] == "ACCOUNT_CASH_FLOW"
+        ]
         mark_rows = sorted(
-            (datetime.fromisoformat(e["payload"]["marked_at"]).astimezone(UTC),
-             _decimal(e["payload"]["broker_net_equity"], "broker_net_equity"))
+            (
+                datetime.fromisoformat(e["payload"]["marked_at"]).astimezone(UTC),
+                _decimal(e["payload"]["broker_net_equity"], "broker_net_equity")
+                - sum((flow for flow_time, flow in cash_flow_rows if flow_time <=
+                       datetime.fromisoformat(e["payload"]["marked_at"]).astimezone(UTC)),
+                      Decimal("0")),
+            )
             for e in marks
         )
-        peak = max((v for _, v in mark_rows), default=equity)
+        current_adjusted_equity = equity - deposits + withdrawals
+        adjusted_peak = max((v for _, v in mark_rows), default=current_adjusted_equity)
+        # Scale the flow-neutral peak back to current account equity so risk sizing
+        # uses actual capital while the drawdown ratio excludes external cash flows.
+        peak = (
+            equity * adjusted_peak / current_adjusted_equity
+            if current_adjusted_equity > 0 else equity
+        )
         week_start = today - timedelta(days=today.weekday())
         month_start = today.replace(day=1)
         def period_drawdown(start: date) -> Decimal:
             period_values = [v for t, v in mark_rows if t.date() >= start]
-            if not period_values:
-                return Decimal("0")
+            if not period_values or current_adjusted_equity <= 0:
+                return Decimal("0") if current_adjusted_equity > 0 else Decimal("1")
             high = max(period_values)
-            return max(Decimal("0"), (high - equity) / high) if high > 0 else Decimal("1")
+            return max(
+                Decimal("0"), (high - current_adjusted_equity) / high
+            ) if high > 0 else Decimal("1")
         return PortfolioSnapshot(
             net_liquidation_equity=equity,
             available_margin=_decimal(mark["available_margin"], "available_margin"),
