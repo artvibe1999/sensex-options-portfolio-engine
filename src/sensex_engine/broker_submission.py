@@ -39,7 +39,7 @@ class BrokerSubmissionPort(Protocol):
     ) -> BrokerOrderReceipt: ...
 
     def find_orders_by_client_key(
-        self, client_order_key: str
+        self, client_order_key: str, *, expected_action: LegExecutionAction | None = None
     ) -> tuple[BrokerOrderReceipt, ...]: ...
 
 
@@ -180,7 +180,16 @@ class DurableBrokerSubmissionService:
                 snapshot, False, "Missing persisted client key; manual reconciliation required"
             )
         try:
-            matches = self._broker.find_orders_by_client_key(client_key)
+            expected_action = LegExecutionAction(
+                leg_index=int(snapshot["leg_index"]),
+                instrument_token=int(snapshot["instrument_token"]),
+                tradingsymbol=str(snapshot["tradingsymbol"]),
+                side=str(snapshot["side"]),
+                quantity=int(snapshot["quantity"]),
+            )
+            matches = self._broker.find_orders_by_client_key(
+                client_key, expected_action=expected_action
+            )
         except Exception as exc:
             if state is OrderState.SUBMITTING:
                 self._mark_unknown(
