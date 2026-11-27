@@ -22,16 +22,22 @@ class EmptyBroker:
 
 
 class FakeFillIngestion:
-    def __init__(self, result=None, error=None):
+    def __init__(self, result=None, error=None, pending=False):
         self.result = list(result or [])
         self.error = error
+        self.pending = pending
         self.calls = 0
+        self.limits = []
 
-    def recover_pending(self):
+    def recover_pending(self, *, limit=1000):
         self.calls += 1
+        self.limits.append(limit)
         if self.error:
             raise self.error
         return self.result
+
+    def has_pending_receipts(self):
+        return self.pending
 
 
 class FakeTradeHistory:
@@ -84,6 +90,7 @@ def test_startup_recovery_preserves_completed_receipt_count_on_poll_failure(tmp_
     assert result.reconciliation is None
     assert result.reasons == ("Startup recovery failed: RuntimeError",)
     assert ingestion.calls == 1
+    assert ingestion.limits == [1000]
     assert history.sessions == [current_ist_date()]
 
 
@@ -149,4 +156,21 @@ def test_startup_recovery_requires_explicit_calendar_date(tmp_path):
         service.recover(session_date="today")
 
     assert ingestion.calls == 0
+    assert history.sessions == []
+
+
+def test_startup_recovery_stops_when_unprocessed_receipts_remain(tmp_path):
+    service, ingestion, history = make_service(tmp_path)
+    ingestion.pending = True
+
+    result = service.recover(session_date=current_ist_date())
+
+    assert not result.recovery_complete
+    assert result.recovered_receipts == 0
+    assert result.backfilled_fills == 0
+    assert result.reconciliation is None
+    assert result.reasons == (
+        "Unprocessed broker fill receipts remain after recovery",
+    )
+    assert ingestion.calls == 1
     assert history.sessions == []
