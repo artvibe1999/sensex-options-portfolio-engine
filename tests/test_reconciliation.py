@@ -123,3 +123,21 @@ def test_reconciliation_rejects_fractional_broker_quantities():
     )
     assert not report.reconciled
     assert any("invalid net quantity" in item for item in report.mismatches)
+
+
+def test_reconciliation_blocks_partially_filled_orders_and_error_positions():
+    contracts = [
+        _contract(1, "SENSEX80000CE", "80000"),
+        _contract(2, "SENSEX80500CE", "80500"),
+    ]
+    position = _position(contracts)
+    position.status = "ERROR"
+    report = reconcile_snapshots(
+        contracts=contracts,
+        internal_positions=[position],
+        broker_positions=_broker_positions(),
+        broker_orders=[{"order_id": "O3", "status": "PARTIALLY FILLED"}],
+    )
+    assert not report.reconciled
+    assert report.pending_order_ids == ("O3",)
+    assert any("ERROR state" in item for item in report.mismatches)
