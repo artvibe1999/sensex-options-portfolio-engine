@@ -78,6 +78,7 @@ class LiveMultiLegExecutionCoordinator:
             raise PermissionError("Live coordinator accepts LIVE positions only")
         if phase not in {ExecutionPhase.OPEN, ExecutionPhase.CLOSE}:
             raise ValueError("Unsupported execution phase")
+        self._assert_fill_projection_healthy()
         position_id = str(position.position_id)
         if phase is ExecutionPhase.OPEN:
             self._ensure_position(position)
@@ -174,14 +175,18 @@ class LiveMultiLegExecutionCoordinator:
                                 "Position state does not permit a close sequence")
         if snapshot["status"] != "CLOSING":
             self._positions.transition(
-                position_id=position_id, status="CLOSING", update_id="live-close-start"
+                position_id=position_id,
+                status="CLOSING",
+                update_id=f"live-close-start:{len(self._orders.all_snapshots())}",
             )
         outcomes = self._close_residual_legs(position, position_id)
         current = self._positions.snapshot(position_id)
         completed = bool(current and current["status"] == "CLOSED" and current["is_fully_closed"])
         if not completed and current and current["status"] == "CLOSING":
             self._positions.transition(
-                position_id=position_id, status="ERROR", update_id="live-close-incomplete"
+                position_id=position_id,
+                status="ERROR",
+                update_id=f"live-close-incomplete:{len(self._orders.all_snapshots())}",
             )
             current = self._positions.snapshot(position_id)
         return LiveExecutionReport(
@@ -279,6 +284,15 @@ class LiveMultiLegExecutionCoordinator:
         if not callable(poll):
             raise TypeError("Trade-history ingestor must expose poll(order_ids)")
         poll([order_id])
+        self._assert_fill_projection_healthy()
+
+    def _assert_fill_projection_healthy(self) -> None:
+        replay = getattr(self._trade_history, "recover_pending", None)
+        if callable(replay):
+            replay()
+        pending = getattr(self._trade_history, "has_pending_receipts", None)
+        if callable(pending) and pending():
+            raise RuntimeError("Durable broker fill projection has pending receipts")
 
     def _unwind_residual(self, position: Position, position_id: str) -> list[LiveLegOutcome]:
         snapshot = self._positions.snapshot(position_id)
