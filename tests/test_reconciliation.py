@@ -169,6 +169,7 @@ def test_reconcile_store_uses_actual_filled_quantities(tmp_path):
     from sensex_engine.position_lifecycle import PositionLifecycle
 
     lifecycle = PositionLifecycle(SqliteStore(tmp_path / "positions.sqlite3"))
+    orders = OrderLifecycle(lifecycle.store)
     lifecycle.create(
         position_id="durable-1", strategy_id="BULL_CALL", mode="paper",
         idempotency_key="create-durable",
@@ -207,6 +208,7 @@ def test_reconcile_store_uses_actual_filled_quantities(tmp_path):
     ]
     report = BrokerReconciliationService().reconcile_store(
         Broker(), contracts=contracts, position_lifecycle=lifecycle,
+        order_lifecycle=orders,
     )
     assert report.reconciled
     assert report.expected_quantities == ((1, 20), (2, -20))
@@ -217,6 +219,7 @@ def test_reconcile_store_fails_closed_for_partial_position(tmp_path):
     from sensex_engine.position_lifecycle import PositionLifecycle
 
     lifecycle = PositionLifecycle(SqliteStore(tmp_path / "partial.sqlite3"))
+    orders = OrderLifecycle(lifecycle.store)
     lifecycle.create(
         position_id="partial-1", strategy_id="BULL_CALL", mode="paper",
         idempotency_key="create-partial",
@@ -245,7 +248,7 @@ def test_reconcile_store_fails_closed_for_partial_position(tmp_path):
     report = BrokerReconciliationService().reconcile_store(
         Broker(), contracts=[_contract(1, "SENSEX80000CE", "80000"),
                              _contract(2, "SENSEX80500CE", "80500")],
-        position_lifecycle=lifecycle,
+        position_lifecycle=lifecycle, order_lifecycle=orders,
     )
     assert not report.reconciled
     assert any("not fully OPEN" in item for item in report.mismatches)
