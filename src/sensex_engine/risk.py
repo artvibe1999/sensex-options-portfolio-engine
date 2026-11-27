@@ -58,7 +58,8 @@ class RiskEngine:
         if portfolio.entries_today >= self.limits.max_new_entries_per_day:
             return reject("Maximum daily entries reached")
         daily_net = portfolio.daily_realized_pnl + portfolio.daily_unrealized_pnl
-        if daily_net <= -(equity * self.limits.daily_loss_stop_pct):
+        if daily_net <= -((portfolio.start_of_day_equity or equity)
+                          * self.limits.daily_loss_stop_pct):
             return reject("Daily loss stop reached")
         if portfolio.weekly_drawdown_pct >= self.limits.weekly_drawdown_stop_pct:
             return reject("Weekly drawdown stop reached")
