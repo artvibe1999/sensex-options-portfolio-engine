@@ -176,6 +176,14 @@ def build_option_chain(
         if contract.strike <= ZERO or contract.right not in (Right.CE, Right.PE):
             rejected.append(RejectedContract(contract.instrument_token, "Invalid option contract"))
             continue
+        if (
+            quote.bid % contract.tick_size != ZERO
+            or quote.ask % contract.tick_size != ZERO
+        ):
+            rejected.append(
+                RejectedContract(contract.instrument_token, "Quote prices violate contract tick size")
+            )
+            continue
         expiry = _expiry_close(contract.expiry)
         seconds = (expiry - now_ist).total_seconds()
         if seconds <= 0:
