@@ -141,3 +141,23 @@ def test_reconciliation_blocks_partially_filled_orders_and_error_positions():
     assert not report.reconciled
     assert report.pending_order_ids == ("O3",)
     assert any("ERROR state" in item for item in report.mismatches)
+
+
+def test_reconciliation_ignores_non_bfo_positions_outside_engine_scope():
+    contracts = [
+        _contract(1, "SENSEX80000CE", "80000"),
+        _contract(2, "SENSEX80500CE", "80500"),
+    ]
+    broker_positions = _broker_positions()
+    broker_positions["net"].append({
+        "exchange": "NSE",
+        "tradingsymbol": "RELIANCE",
+        "quantity": 100,
+    })
+    report = reconcile_snapshots(
+        contracts=contracts,
+        internal_positions=[_position(contracts)],
+        broker_positions=broker_positions,
+        broker_orders=[],
+    )
+    assert report.reconciled
