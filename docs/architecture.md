@@ -267,8 +267,10 @@ before the submission service crosses the broker boundary.
 
 PE-04 constructs the adapter from the same authenticated Kite client as the
 read-only broker and stores it in Telegram application state. Construction does
-not submit an order. The durable submission service's explicit live-enable flag
-remains false by default, and the multi-leg coordinator is not invoked by Telegram.
+not submit an order. PE-04 itself does not construct or invoke the submission service. PE-05 later
+constructs the durable submission service and PE-03 coordinator only inside the
+close-only emergency service; no regular Telegram or strategy path can open a
+position through that emergency dependency graph.
 
 
 
@@ -276,8 +278,9 @@ remains false by default, and the multi-leg coordinator is not invoked by Telegr
 
 `LiveMultiLegExecutionCoordinator` composes the durable order/position ledgers,
 the one-shot broker submission boundary, Kite's LIMIT adapter, and the individual
-trade-history fill ingestor. It is a standalone service and is intentionally not
-constructed by the Telegram runtime; runtime readiness/wiring remains PE-04.
+trade-history fill ingestor. It remains a reusable execution primitive. PE-05
+constructs it inside the Telegram runtime only for emergency CLOSE operations;
+normal strategy-entry orchestration is not connected to this coordinator.
 
 The coordinator requires two independent opt-ins: its own `live_execution_enabled`
 flag and a `DurableBrokerSubmissionService` constructed with live submission
@@ -319,10 +322,12 @@ flattening. This ensures reconciliation sees the new residual rather than silent
 discarding the race.
 
 PE-03 is an execution orchestration capability, not a live-trading enablement
-milestone. No Telegram command or runtime path invokes this coordinator until
-PE-04 injects all live readiness, risk, market-data, authentication and persistence
-dependencies. Paper remains the process-start default and no real order was placed
-during implementation.
+milestone. PE-05 is its only Telegram runtime caller and invokes CLOSE only after
+entry halt, cancellation-safe recovery, broker/local exposure reconciliation and
+static-IP confirmation. The emergency service enables the coordinator/submission
+flags only inside this close-only boundary; no normal strategy entry path receives
+the coordinator. Paper remains the process-start default and no real order was
+placed during implementation.
 
 
 ## Full runtime live-readiness wiring (PE-04)
@@ -366,5 +371,60 @@ is impossible. This is a deliberate dependency boundary, not a readiness bypass.
 A successful startup recovery is still not enough. Both `/resume` and the separate
 `/confirm_live` command re-evaluate the complete dependency graph. A failure
 denies the command. Monitor failures continue to force PAPER mode and pause entries.
-The order adapter is constructed for dependency readiness only; neither the
-submission service nor the PE-03 coordinator is activated by this milestone.
+The order adapter is constructed for dependency readiness only by PE-04. PE-05
+subsequently wires the submission service/coordinator into a separate emergency
+close-only service; this does not enable regular live entries.
+
+
+## Managed emergency close-all (PE-05)
+
+The Telegram /closeall and /emergency commands dispatch an allowlisted, audited
+close-only workflow. The handler pauses entries and forces PAPER mode before it
+moves the synchronous broker workflow to a worker thread. An emergency_active
+guard rejects concurrent /resume, /live and /confirm_live requests. The emergency
+guard is cleared when the operation returns, but the runtime remains paused in
+PAPER mode and is never auto-resumed.
+
+EmergencyCloseAllService requires healthy SQLite, authenticated Kite access,
+a current SENSEX BFO contract master and explicit static-IP confirmation. It
+recovers every durable LIVE order by its deterministic client tag and backfills
+individual Kite trades. Unsubmitted OPEN intents are rejected locally. Submitted
+OPEN orders are cancelled only through the durable one-shot submission service;
+the service then refreshes broker status and trade history until cancellation is
+confirmed. Cancel-request acknowledgement is not terminal. Existing CLOSE orders
+are not cancelled, and unresolved/uncorrelated orders block new close orders.
+
+Before sending any close, the service compares signed net quantities from Kite
+with the durable LIVE position-fill projection and checks the broker order book.
+Untracked/manual SENSEX exposure or uncorrelated active SENSEX orders are not
+adopted into the internal fill ledger and prevent automated closure. This avoids
+inventing opening fills or accidentally reversing an unmanaged position.
+
+Managed positions are reconstructed from immutable persisted leg plans and the
+current BFO contract master, then passed to LiveMultiLegExecutionCoordinator
+with ExecutionPhase.CLOSE only. The coordinator buys back SELL-origin short
+legs before selling BUY-origin protective legs. Each close uses a fresh quote,
+validated depth/volume/spread/timestamp, and a marketable LIMIT price rounded to
+the contract tick. Individual Kite trade-history fills, not order acknowledgements,
+drive position projection. Replacements are bounded and require prior terminal or
+cancel-confirmed status plus fill backfill. A durable VALIDATED close intent can be
+resumed after preflight; an uncertain SUBMITTING/UNKNOWN order is never duplicated.
+
+After all managed positions have been attempted, current-session trade history is
+backfilled again. Every local LIVE position must be flat/finalized, every LIVE
+order must be terminal, the broker order book must contain no active SENSEX orders,
+and a fresh Kite net-position snapshot must show zero SENSEX quantity. Any mismatch,
+pending receipt, stale quote, unresolved order, missing static-IP confirmation or
+unmanaged exposure leaves the report INCOMPLETE with explicit residuals/reasons.
+The report and durable emergency events never claim broker flatness from local
+position state alone.
+
+Positions with zero exposure but no closing fill can only be finalized by the
+explicit POSITION_STATUS_CHANGED flat-finalization event. The SQLite event
+transaction verifies every leg's cumulative open quantity equals its cumulative
+close quantity; generic status changes cannot manually mark a position CLOSED.
+
+The emergency service is the only Telegram runtime caller of PE-03. Its coordinator
+and durable submission flags are explicitly enabled only within this service, and
+the service invokes CLOSE only. It does not bypass PE-06 for new live entries,
+does not auto-resume, and does not place any real order during implementation.
