@@ -54,6 +54,8 @@ class KiteTradeHistoryIngestor:
         """
         if not isinstance(session_date, date) or isinstance(session_date, datetime):
             raise ValueError("session_date must be an explicit calendar date")
+        if session_date != datetime.now(IST).date():
+            raise ValueError("Kite trade-history backfill is limited to the current IST session")
         order_ids: list[str] = []
         for snapshot in self._orders.all_snapshots():
             if snapshot.get("mode") != "live" or not snapshot.get("broker_order_id"):
