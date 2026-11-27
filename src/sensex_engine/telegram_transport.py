@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
+from .broker_monitor import KiteBrokerMonitor
 from .mode import ModeController
 from .persistence import SqliteStore
 from .telegram_control import OperationsController
@@ -117,6 +118,8 @@ def create_telegram_application(
     operations: OperationsController,
     store: SqliteStore,
     readiness_provider: ReadinessProvider | None = None,
+    post_init: Callable[[Any], Any] | None = None,
+    post_shutdown: Callable[[Any], Any] | None = None,
 ) -> Any:
     """Create a polling-capable Telegram Application; caller controls process lifecycle."""
     if not token.strip():
@@ -128,7 +131,12 @@ def create_telegram_application(
             "Install the optional Telegram dependency: pip install -e '.[telegram]'"
         ) from exc
 
-    application = Application.builder().token(token).build()
+    builder = Application.builder().token(token)
+    if post_init is not None:
+        builder = builder.post_init(post_init)
+    if post_shutdown is not None:
+        builder = builder.post_shutdown(post_shutdown)
+    application = builder.build()
 
     async def callback(update: Any, context: Any) -> None:
         await dispatch_command(
@@ -173,6 +181,8 @@ def build_application_from_settings(
     settings: Any,
     *,
     readiness_provider: ReadinessProvider | None = None,
+    post_init: Callable[[Any], Any] | None = None,
+    post_shutdown: Callable[[Any], Any] | None = None,
 ) -> Any:
     """Build the actual polling application from environment-backed settings.
 
@@ -198,6 +208,8 @@ def build_application_from_settings(
         operations=operations,
         store=store,
         readiness_provider=readiness_provider,
+        post_init=post_init,
+        post_shutdown=post_shutdown,
     )
     application.bot_data["operations_controller"] = operations
     application.bot_data["portfolio_store"] = store
@@ -268,12 +280,132 @@ def run_startup_recovery_from_settings(
         return None
 
 
+
+
+def build_supervised_monitor_from_settings(
+    settings: Any,
+    *,
+    store: SqliteStore,
+    operations: OperationsController,
+    alert_sender: Callable[[bool, str], Any] | None = None,
+    broker_factory: Callable[[str, str], Any] | None = None,
+) -> KiteBrokerMonitor | None:
+    """Build the recurring read-only monitor; missing credentials keep it absent.
+
+    Each reconnect constructs a fresh Kite client and fresh service wrappers while
+    reusing the same durable SQLite store. A failed/stale cycle forces paper mode,
+    pauses entries, and closes the startup recovery gate. A healthy later cycle
+    reopens only the recovery gate; it never unpauses or re-enables live trading.
+    """
+    def secret_value(value: Any) -> str:
+        getter = getattr(value, "get_secret_value", None)
+        raw = getter() if callable(getter) else value
+        return str(raw or "").strip()
+
+    api_key = secret_value(getattr(settings, "kite_api_key", ""))
+    access_token = secret_value(getattr(settings, "kite_access_token", ""))
+    if not api_key or not access_token:
+        return None
+
+    from .broker_fill_ingestion import BrokerFillIngestionService
+    from .fill_coordinator import FillCoordinator
+    from .kite import KiteReadOnlyAdapter
+    from .kite_fill_transport import KiteTradeHistoryIngestor
+    from .order_lifecycle import OrderLifecycle
+    from .position_lifecycle import PositionLifecycle
+    from .startup_recovery import KiteStartupRecoveryService
+
+    factory = broker_factory or KiteReadOnlyAdapter.from_credentials
+
+    def recovery_factory() -> Any:
+        broker = factory(api_key, access_token)
+        positions = PositionLifecycle(store)
+        orders = OrderLifecycle(store)
+        ingestion = BrokerFillIngestionService(FillCoordinator(orders, positions))
+        history = KiteTradeHistoryIngestor(
+            client=broker, orders=orders, positions=positions, ingestion=ingestion,
+        )
+        return KiteStartupRecoveryService(
+            broker=broker,
+            contracts_provider=broker.instruments,
+            position_lifecycle=positions,
+            order_lifecycle=orders,
+            fill_ingestion=ingestion,
+            trade_history=history,
+        )
+
+    async def on_health_change(healthy: bool, reason: str) -> None:
+        if healthy:
+            operations.startup_recovery_complete = True
+            logger.info("Kite broker monitor recovered: %s", reason)
+        else:
+            operations.startup_recovery_complete = False
+            operations.paused = True
+            operations.mode.force_paper()
+            logger.error("Kite broker monitor fail-closed: %s", reason)
+        if alert_sender is not None:
+            try:
+                result = alert_sender(healthy, reason)
+                if hasattr(result, "__await__"):
+                    await result
+            except Exception:
+                logger.exception("Kite broker monitor alert delivery failed")
+
+    return KiteBrokerMonitor(
+        recovery_factory=recovery_factory,
+        on_health_change=on_health_change,
+        poll_interval_seconds=int(
+            getattr(settings, "kite_monitor_poll_interval_seconds", 30)
+        ),
+        stale_after_seconds=int(
+            getattr(settings, "kite_monitor_max_stale_seconds", 120)
+        ),
+        retry_max_seconds=int(
+            getattr(settings, "kite_monitor_retry_max_seconds", 30)
+        ),
+    )
+
+
 def run_from_environment() -> None:
     """Run Telegram polling after a read-only, fail-closed Kite recovery attempt."""
     from .config import Settings
 
     settings = Settings()
-    application = build_application_from_settings(settings)
+    monitor_holder: dict[str, KiteBrokerMonitor] = {}
+
+    async def post_init(application: Any) -> None:
+        operations = application.bot_data["operations_controller"]
+        store = application.bot_data["portfolio_store"]
+        allowed_chats = sorted(operations.allowlist.chat_ids)
+
+        async def send_monitor_alert(healthy: bool, reason: str) -> None:
+            status = "RECOVERED" if healthy else "UNHEALTHY — FORCED PAPER MODE; ENTRIES PAUSED"
+            message = f"SENSEX broker monitor: {status}. {reason}"
+            for chat_id in allowed_chats:
+                try:
+                    await application.bot.send_message(chat_id=chat_id, text=message)
+                except Exception:
+                    logger.exception("Could not deliver broker monitor alert to allowlisted chat")
+
+        monitor = build_supervised_monitor_from_settings(
+            settings,
+            store=store,
+            operations=operations,
+            alert_sender=send_monitor_alert,
+        )
+        if monitor is not None:
+            monitor_holder["monitor"] = monitor
+            application.bot_data["broker_monitor"] = monitor
+            await monitor.start()
+
+    async def post_shutdown(application: Any) -> None:
+        monitor = monitor_holder.get("monitor")
+        if monitor is not None:
+            await monitor.stop()
+
+    application = build_application_from_settings(
+        settings, post_init=post_init, post_shutdown=post_shutdown,
+    )
     run_startup_recovery_from_settings(
         settings,
         store=application.bot_data["portfolio_store"],
