@@ -217,8 +217,13 @@ def run_startup_recovery_from_settings(
     prevent the paper-mode Telegram process from starting.
     """
     operations.startup_recovery_complete = False
-    api_key = str(getattr(settings, "kite_api_key", "") or "").strip()
-    access_token = str(getattr(settings, "kite_access_token", "") or "").strip()
+    def secret_value(value: Any) -> str:
+        getter = getattr(value, "get_secret_value", None)
+        raw = getter() if callable(getter) else value
+        return str(raw or "").strip()
+
+    api_key = secret_value(getattr(settings, "kite_api_key", ""))
+    access_token = secret_value(getattr(settings, "kite_access_token", ""))
     if not api_key or not access_token:
         return None
 
