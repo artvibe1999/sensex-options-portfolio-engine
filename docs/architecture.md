@@ -21,11 +21,21 @@ fully filled; closing stops before selling a long unless the preceding short cov
 confirmed fully filled. Accepted-but-unfilled, partial, rejected, malformed, and
 uncertain submission results halt the sequence and require reconciliation.
 
-This coordinator refuses LIVE positions and has no Kite implementation. Its stable
-client-order key is passed to the injected paper submitter, but the coordinator does
-not itself durably persist submissions, recover an ambiguous timeout, cancel an
-outstanding order, or manage residual exposure. It is a tested paper orchestration
-primitive, not a broker execution service or proof of live multi-leg protection.
+The paper coordinator refuses LIVE positions. A separate broker-agnostic
+submission boundary now persists a stable client-order key and claims the order by
+moving its durable intent to SUBMITTING before invoking an injected broker port.
+A timeout, malformed response, or local persistence failure after a broker response
+moves the intent to UNKNOWN where possible; the service never automatically resends
+that intent. Restart recovery queries the broker by the exact persisted client key:
+zero or multiple matches remain blocked, and exactly one match is correlated without
+treating acknowledgement as a fill. Fill events must still be independently persisted
+before the multi-leg coordinator may advance.
+
+Live submission is disabled by default, and no Kite order-placement adapter or
+runtime wiring exists. The injected broker port must provide reliable exact-key
+lookup; this contract has not yet been validated against Kite's actual order-tag
+and order-history semantics. This boundary is not production execution or emergency
+close protection.
 
 
 ## Capital accounting
