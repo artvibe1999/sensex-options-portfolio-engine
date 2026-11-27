@@ -13,6 +13,7 @@ class OperationsController:
     paused: bool = True
     portfolio_queries: Any | None = None
     startup_recovery_complete: bool = False
+    emergency_close_all: Any | None = None
 
     def handle(
         self,
@@ -35,8 +36,8 @@ class OperationsController:
             )
         if normalized == "/help":
             return (
-                "Commands: /status /paper /live /confirm_live /pause /resume. "
-                "Read-only portfolio queries and position closure are not enabled yet."
+                "Commands: /status /paper /live /confirm_live /pause /resume /positions /orders /closeall /emergency. "
+                "Emergency close-all immediately halts entries and forces paper mode."
             )
         if normalized == "/paper":
             self.mode.force_paper()
