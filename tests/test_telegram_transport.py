@@ -333,3 +333,14 @@ def test_emergency_command_rejects_unauthorized_user_before_execution(tmp_path):
     assert calls == []
     assert "not authorized" in message.replies[0]
     assert store.command_audit_for("telegram:303")["outcome"] == "DENIED"
+
+
+
+def test_live_resume_and_confirmation_are_blocked_during_emergency():
+    operations = _operations()
+    operations.startup_recovery_complete = True
+    operations.emergency_active = True
+    for command in ("/live", "/confirm_live", "/resume"):
+        with pytest.raises(RuntimeError, match="Emergency close-all is in progress"):
+            operations.handle(command, user_id=11, chat_id=22, broker_ready=True, risk_clear=True)
+    assert operations.paused
