@@ -1,8 +1,24 @@
 """Read-only reconciliation of internal multi-leg exposure against broker state."""
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol
 
-from sensex_engine.domain import Contract, Position, Side
+
+class ContractLike(Protocol):
+    instrument_token: int
+    tradingsymbol: str
+    lot_size: int
+
+
+class LegLike(Protocol):
+    contract: ContractLike
+    side: Any
+    lots: int
+
+
+class PositionLike(Protocol):
+    position_id: Any
+    status: str
+    legs: tuple[LegLike, ...]
 
 
 ACTIVE_ORDER_STATUSES = frozenset({
@@ -23,7 +39,7 @@ class ReconciliationReport:
 
 
 def _expected_quantities(
-    positions: list[Position],
+    positions: list[PositionLike],
 ) -> tuple[dict[int, int], list[str]]:
     expected: dict[int, int] = {}
     issues: list[str] = []
@@ -34,7 +50,7 @@ def _expected_quantities(
             issues.append(f"Internal position {position.position_id} is in ERROR state")
         for leg in position.legs:
             quantity = leg.contract.lot_size * leg.lots
-            signed = quantity if leg.side is Side.BUY else -quantity
+            signed = quantity if getattr(leg.side, "value", leg.side) == "BUY" else -quantity
             token = leg.contract.instrument_token
             expected[token] = expected.get(token, 0) + signed
     return (
@@ -45,7 +61,7 @@ def _expected_quantities(
 
 def reconcile_snapshots(
     *,
-    contracts: list[Contract],
+    contracts: list[ContractLike],
     internal_positions: list[Position],
     broker_positions: dict[str, Any],
     broker_orders: list[dict[str, Any]],
@@ -151,7 +167,7 @@ class BrokerReconciliationService:
         broker: Any,
         *,
         contracts: list[Contract],
-        internal_positions: list[Position],
+        internal_positions: list[PositionLike],
     ) -> ReconciliationReport:
         try:
             if not broker.is_authenticated():
