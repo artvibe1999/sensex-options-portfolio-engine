@@ -80,7 +80,6 @@ class KiteReadOnlyAdapter:
         )
         result: dict[int, Quote] = {}
         for token in instrument_tokens:
-            self._symbols_by_token[token]
             raw = raw_quotes.get(self._symbols_by_token[token])
             if not raw:
                 continue
