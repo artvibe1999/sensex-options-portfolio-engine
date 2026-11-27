@@ -312,3 +312,40 @@ def test_multiple_partial_fills_complete_one_order_without_overcounting(tmp_path
     assert order["filled_quantity"] == 10
     assert leg["opened_quantity"] == 10
     assert leg["open_average_price"] == "101.2"
+
+
+def test_durable_inbox_recovers_when_process_stops_between_ledgers(tmp_path):
+    service, orders, positions = setup_ingestion(tmp_path)
+    original = positions.record_leg_fill
+    calls = {"count": 0}
+
+    def fail_once(**kwargs):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise RuntimeError("simulated crash after order fill persistence")
+        return original(**kwargs)
+
+    positions.record_leg_fill = fail_once
+    with pytest.raises(RuntimeError, match="simulated crash"):
+        service.ingest(event())
+
+    receipt = orders.store.broker_fill_receipt("kite-order-1:trade-1")
+    assert receipt["status"] == "RECEIVED"
+    assert orders.snapshot("order-open-long")["filled_quantity"] == 10
+    assert positions.snapshot("position-1")["legs"][0]["opened_quantity"] == 0
+
+    recovered = service.recover_pending()
+
+    assert len(recovered) == 1
+    assert recovered[0].order_event_created is False
+    assert recovered[0].position_event_created is True
+    assert positions.snapshot("position-1")["legs"][0]["opened_quantity"] == 10
+    assert orders.store.broker_fill_receipt("kite-order-1:trade-1")["status"] == "PROCESSED"
+
+
+def test_duplicate_receipt_with_changed_payload_is_rejected(tmp_path):
+    service, orders, _ = setup_ingestion(tmp_path)
+    service.ingest(event())
+
+    with pytest.raises(ValueError, match="conflicts with existing payload"):
+        service.ingest(event(quantity=9))
