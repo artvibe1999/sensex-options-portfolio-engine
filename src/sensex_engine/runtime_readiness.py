@@ -5,13 +5,15 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
-from statistics import median
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from .capital import adaptive_risk_budget
 from .domain import PortfolioSnapshot, Right
 from .market_data import validate_quote
 from .readiness import LiveReadinessService
+
+IST = ZoneInfo("Asia/Kolkata")
 
 
 class KitePortfolioRiskReadiness:
@@ -172,7 +174,7 @@ def build_kite_live_readiness_service(
         now = datetime.now(UTC)
         eligible = [
             item for item in contracts
-            if item.expiry.date() >= now.astimezone().date()
+            if item.expiry.date() >= now.astimezone(IST).date()
         ]
         if not eligible:
             raise RuntimeError("No unexpired SENSEX option contracts are listed")
