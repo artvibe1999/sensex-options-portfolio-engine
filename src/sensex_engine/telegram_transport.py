@@ -151,7 +151,7 @@ def operations_from_settings(settings: Any) -> OperationsController:
 
 def _sqlite_database_path(database_url: str) -> str:
     if database_url == "sqlite:///:memory:":
-        return ":memory:"
+        raise ValueError("In-memory SQLite is unsupported by the per-operation audit store")
     if database_url.startswith("sqlite:////"):
         return "/" + database_url[len("sqlite:////"):]
     if database_url.startswith("sqlite:///"):
