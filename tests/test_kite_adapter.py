@@ -143,3 +143,13 @@ def test_kite_adapter_exposes_read_only_per_order_trade_history():
     assert fake.trade_order_ids == ["kite-1"]
     with pytest.raises(ValueError):
         adapter.order_trades("")
+
+
+
+def test_kite_adapter_exposes_equity_margin_snapshot():
+    adapter = KiteReadOnlyAdapter(FakeKite())
+    result = adapter.margins("equity")
+    assert result["enabled"] is True
+    assert result["net"] == 100000
+    with pytest.raises(ValueError, match="segment"):
+        adapter.margins("bfo")
