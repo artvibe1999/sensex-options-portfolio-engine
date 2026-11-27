@@ -137,9 +137,9 @@ class SqliteStore:
                         continue
                     if str(prior_broker_id) == incoming_broker_id:
                         if event["aggregate_id"] != aggregate_id:
-                            raise ValueError("Broker order ID is already assigned to another internal order")
-                        if str(prior_broker_id) != incoming_broker_id:
-                            raise ValueError("Internal order broker ID cannot be changed")
+                            raise ValueError(
+                                "Broker order ID is already assigned to another internal order"
+                            )
                 existing_ids = {
                     str(json.loads(event["payload_json"])["broker_order_id"])
                     for event in connection.execute(
