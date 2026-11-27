@@ -899,8 +899,8 @@ foundation, stub, plan, injectable interface, or paper-only simulation does not
 complete a live requirement. The count below counts IDs, not sub-bullets.
 
 **Register update: PE-01, PE-02 and PE-03 are COMPLETE. PE-03 was verified on
-exact implementation head c42131f3de93b49e45fefaea49e93eb127488819 (Ruff passed;
-pytest 205 passed; 85% statement coverage; push CI and PR CI passed). The canonical
+exact implementation head 272f949adeda4cd06b21b293a0aa153bfce4ec02 (Ruff passed;
+pytest 206 passed; 85% statement coverage; push CI and PR CI passed). The canonical
 register now has 14 pending or partial items.** All are in scope because they map
 directly to requirements in sections 5–16. No additional feature may be added
 unless it is explicitly required by this document.
@@ -909,7 +909,7 @@ unless it is explicitly required by this document.
 |---|---|---|
 | PE-01 | COMPLETE | **Supervised broker fill acquisition and reconciliation.** Recurring current-session Kite trade-history polling, supervised Telegram lifecycle, adapter recreation/retry, missed-event backfill through the durable inbox, periodic broker reconciliation, watchdog stale/worker-death detection, allowlisted Telegram alerts and fail-closed paper/pause behaviour are implemented and covered by CI at commit f3d973462e3a15ef741c7f24ec2de7355827f0ab. |
 | PE-02 | COMPLETE | **Kite order-placement adapter.** Added a BFO SENSEX-only LIMIT adapter with refreshed-contract/token/symbol checks, whole-lot and tick-aligned price validation, NRML/DAY/regular order policy, deterministic 20-character alphanumeric tag derived from the durable client key, exact same-day order-book lookup bound to persisted order identity, guarded LIMIT modify/cancel, response/status validation, and a conservative per-process request throttle. Kite tags are correlation hints, not broker-side idempotency guarantees; the durable submission boundary never retries uncertain submissions, and missing/ambiguous lookup results remain blocked. Runtime wiring and full live-readiness belong to PE-04. Live submission remains disabled by default. |
-| PE-03 | COMPLETE | **Durable live multi-leg execution and recovery.** Implemented in `live_execution.py`: immutable durable LIMIT intents, fill-ledger gating, one-shot broker submission/recovery, confirmed cancel-before-replace, partial/reject/timeout handling, cancel/fill race recovery, short-first residual cleanup and explicit blocked exposure reporting. Coordinator and submission are opt-in and not wired to runtime; PE-04 owns full live-readiness/runtime injection. |
+| PE-03 | COMPLETE | **Durable live multi-leg execution and recovery.** Implemented in `live_execution.py`: immutable durable LIMIT intents, fill-ledger gating, one-shot broker submission/recovery, confirmed cancel-before-replace, partial/reject/timeout handling, cancel/fill race recovery, short-first residual cleanup, unresolved-opening-order close protection and explicit blocked exposure reporting. Coordinator and submission are opt-in and not wired to runtime; PE-04 owns full live-readiness/runtime injection. |
 | PE-04 | PARTIAL | **Complete live-readiness wiring.** Construct and inject real broker-authentication, contract-master, fresh market-data, persistence, reconciliation and portfolio-risk dependencies in the runtime. Every required gate must fail closed; startup recovery alone is insufficient. |
 | PE-05 | NOT STARTED | **Managed emergency close-all.** Implement the specified halt, reconcile, cancel-safe-pending-entry, protect/close structure-aware sequencing, per-leg fill verification, retries only after idempotency/status checks, final flat reconciliation, and explicit residual-exposure reporting. |
 | PE-06 | PARTIAL | **Complete equity and portfolio risk accounting.** Finish authoritative net-equity/deposit/withdrawal/P&L/charges/cash/margin accounting, dynamic risk and lot sizing, drawdown enforcement, and reconciliation of risk against actual filled exposure and broker margin. |
@@ -956,3 +956,11 @@ unless it is explicitly required by this document.
 - Added a hard execution gate that replays pending fill-inbox receipts and refuses any new broker action while fill-to-position projection remains incomplete.
 - Verification at commit `c42131f3de93b49e45fefaea49e93eb127488819`: Ruff passed; pytest **205 passed**; **85% statement coverage**. Push CI and PR CI both passed.
 - PE-03 does not complete PE-04. Runtime wiring, full live readiness/risk/market-data dependency injection and Telegram activation gates remain outstanding. Paper remains the process-start default.
+
+
+### PE-03 exact-head verification
+- Branch head: `272f949adeda4cd06b21b293a0aa153bfce4ec02`.
+- Ruff passed; pytest **206 passed**; **85% statement coverage**.
+- Push CI: https://github.com/artvibe1999/sensex-options-portfolio-engine/actions/runs/46006148413 — passed.
+- Pull-request CI: https://github.com/artvibe1999/sensex-options-portfolio-engine/actions/runs/46006138830 — passed.
+- PR #1 remains open, draft and unmerged. No deployment or live order was performed.
