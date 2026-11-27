@@ -42,13 +42,13 @@ class PortfolioQueryService:
         if report is None:
             return "Account equity is unavailable: opening balance or a fresh reconciled broker mark is missing, stale, or mismatched. LIVE readiness remains blocked."
         if view == "pnl":
-            keys = ("realized_net_pnl", "unrealized_pnl", "net_liquidation_equity")
+            keys = ("realized_net_pnl", "fees_and_taxes", "unrealized_pnl", "net_liquidation_equity")
         elif view == "capital":
-            keys = ("opening_equity", "deposits", "withdrawals", "net_liquidation_equity", "available_margin")
+            keys = ("opening_equity", "deposits", "withdrawals", "cash_balance", "net_liquidation_equity", "available_margin")
         else:
             keys = ("open_max_loss", "weekly_drawdown_pct", "monthly_drawdown_pct", "open_positions", "entries_today")
         labels = {
-            "realized_net_pnl": "Realised net P&L", "unrealized_pnl": "Unrealised P&L",
+            "realized_net_pnl": "Realised net P&L", "fees_and_taxes": "Fees and taxes",\n            "cash_balance": "Cash balance", "unrealized_pnl": "Unrealised P&L",
             "net_liquidation_equity": "Net liquidation equity", "opening_equity": "Opening equity",
             "deposits": "Deposits", "withdrawals": "Withdrawals", "available_margin": "Available margin",
             "open_max_loss": "Open defined max loss", "weekly_drawdown_pct": "Weekly drawdown %",
