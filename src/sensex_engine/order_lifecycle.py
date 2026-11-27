@@ -112,7 +112,7 @@ class OrderLifecycle:
             existing = self.snapshot(order_id)
             if existing is not None:
                 raise ValueError("Order intent already exists")
-            return self.store.append_event(
+            return self.store.append_order_event(
                 idempotency_key=idempotency_key,
                 event_type="ORDER_INTENT_CREATED",
                 aggregate_id=order_id,
@@ -171,8 +171,9 @@ class OrderLifecycle:
             }
             if broker_order_id:
                 payload["broker_order_id"] = broker_order_id
-            return self.store.append_event(
+            return self.store.append_order_event(
                 idempotency_key=event_key,
+                expected_state=old_state.value,
                 event_type="ORDER_STATE_CHANGED",
                 aggregate_id=order_id,
                 payload=payload,
@@ -236,8 +237,11 @@ class OrderLifecycle:
                 "cumulative_filled_quantity": total,
                 "state": new_state.value,
             }
-            created = self.store.append_event(
+            created = self.store.append_order_event(
                 idempotency_key=key,
+                expected_state=state.value,
+                max_quantity=requested,
+                fill_quantity=quantity,
                 event_type="ORDER_FILL_RECORDED",
                 aggregate_id=order_id,
                 payload=payload,
