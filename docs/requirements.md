@@ -898,12 +898,12 @@ acceptance conditions are implemented, tested, and verified on the branch. A
 foundation, stub, plan, injectable interface, or paper-only simulation does not
 complete a live requirement. The count below counts IDs, not sub-bullets.
 
-**Register update: PE-01 through PE-04 are COMPLETE. PE-04 adds runtime-backed
-Kite authentication, contract/quote freshness, durable-store health, broker
-reconciliation, funds/margin checks, portfolio-risk gates and Telegram injection.
-PE-06 remains a required dependency for authoritative equity/drawdown snapshots,
-so live activation remains blocked until that work is complete. The canonical
-register now has 13 pending or partial items.** All are in scope because they map
+**Register update: PE-01 through PE-05 are COMPLETE. PE-05 adds the allowlisted,
+audited, fail-closed emergency close-all path with entry halt, pending-entry
+cancellation, durable fill recovery, structure-aware close sequencing and final
+broker-flat reconciliation. PE-06 remains a required dependency for normal live
+entry readiness and authoritative equity/drawdown snapshots. The canonical
+register now has 12 pending or partial items.** All are in scope because they map
 directly to requirements in sections 5–16. No additional feature may be added
 unless it is explicitly required by this document.
 
@@ -913,7 +913,7 @@ unless it is explicitly required by this document.
 | PE-02 | COMPLETE | **Kite order-placement adapter.** Added a BFO SENSEX-only LIMIT adapter with refreshed-contract/token/symbol checks, whole-lot and tick-aligned price validation, NRML/DAY/regular order policy, deterministic 20-character alphanumeric tag derived from the durable client key, exact same-day order-book lookup bound to persisted order identity, guarded LIMIT modify/cancel, response/status validation, and a conservative per-process request throttle. Kite tags are correlation hints, not broker-side idempotency guarantees; the durable submission boundary never retries uncertain submissions, and missing/ambiguous lookup results remain blocked. PE-04 constructs this adapter in the runtime for readiness/dependency checks only; live submission remains disabled by default. |
 | PE-03 | COMPLETE | **Durable live multi-leg execution and recovery.** Implemented in `live_execution.py`: immutable durable LIMIT intents, fill-ledger gating, one-shot broker submission/recovery, confirmed cancel-before-replace, partial/reject/timeout handling, cancel/fill race recovery, short-first residual cleanup, unresolved-opening-order close protection and explicit blocked exposure reporting. The coordinator and submission service remain opt-in and are not invoked by Telegram; PE-04 wires the readiness dependency graph only. |
 | PE-04 | COMPLETE | **Complete live-readiness wiring.** Telegram runtime constructs and injects authenticated Kite read-only and order adapters, current BFO contract master, paired CE/PE quotes (2-second freshness, depth/volume/spread/skew checks), SQLite quick-check, durable position/order lifecycles, broker reconciliation, live account funds/margin checks, adaptive portfolio-risk gate and explicit Kite static-IP confirmation. Both /resume and /confirm_live evaluate every gate. Missing dependencies deny readiness. The portfolio risk gate requires authoritative PE-06 equity/drawdown snapshots and therefore intentionally remains false until PE-06 is complete; no risk values are fabricated and live submission remains disabled. |
-| PE-05 | NOT STARTED | **Managed emergency close-all.** Implement the specified halt, reconcile, cancel-safe-pending-entry, protect/close structure-aware sequencing, per-leg fill verification, retries only after idempotency/status checks, final flat reconciliation, and explicit residual-exposure reporting. |
+| PE-05 | COMPLETE | **Managed emergency close-all.** /closeall and /emergency immediately pause entries and force PAPER mode; recover and cancel correlated pending OPEN orders, verify broker cancellation and racing fills, reconcile broker/local SENSEX net exposure, resume only durable VALIDATED CLOSE intents, close every managed LIVE position through PE-03 (short legs first, then protective longs), require per-leg individual trade fills, permit bounded replacements only after terminal/cancel-confirmed state, and perform final broker-position/order-book/fill-projection reconciliation. Uncorrelated manual SENSEX exposure/orders, stale quotes, missing static-IP confirmation, unknown orders, and broker/local mismatches block automatic closure and are reported as residuals. Emergency operation remains halted in PAPER mode; no auto-resume. |
 | PE-06 | PARTIAL | **Complete equity and portfolio risk accounting.** Finish authoritative net-equity/deposit/withdrawal/P&L/charges/cash/margin accounting, dynamic risk and lot sizing, drawdown enforcement, and reconciliation of risk against actual filled exposure and broker margin. |
 | PE-07 | PARTIAL | **Portfolio Greeks and scenario stress.** Complete aggregate Greeks and multi-leg/multi-expiry stress calculations, including defined-risk verification and their use in candidate, sizing, monitoring and readiness gates. |
 | PE-08 | PARTIAL | **Strategy arbitration and correlation controls.** Complete candidate scoring/selection, portfolio interaction and correlation checks, concurrency limits, rejection diagnostics, and deterministic no-trade decisions. |
@@ -998,3 +998,20 @@ unless it is explicitly required by this document.
 - Push CI: https://github.com/artvibe1999/sensex-options-portfolio-engine/actions/runs/46007994344 — passed.
 - Pull-request CI: https://github.com/artvibe1999/sensex-options-portfolio-engine/actions/runs/46008002081 — passed.
 - PR #1 remains open, draft and unmerged. No deployment or live order was performed.
+
+
+## PE-05 — managed emergency close-all
+
+- Added EmergencyCloseAllService and a structured EmergencyCloseReport. Each invocation persists a durable start and finish/failure event, including unresolved orders, residual broker quantities and reasons.
+- Telegram /closeall and /emergency are allowlisted and audited. They immediately pause new entries and force PAPER mode before running the synchronous broker workflow in a worker thread. The handler remains responsive.
+- While emergency execution is active, /resume, /live and /confirm_live are rejected. Completion does not restore entries or LIVE mode.
+- The service requires confirmed Kite static-IP registration, healthy durable SQLite, authenticated Kite access and a fresh SENSEX BFO contract master before attempting broker order actions.
+- Every correlated LIVE opening order is recovered by its durable client tag. Unsubmitted entry intents are rejected locally; submitted entries are cancelled once, then refreshed and trade-history backfilled until broker terminal/cancel-confirmed state is established. A cancel acknowledgement alone never permits closing or replacement.
+- Existing close orders are never cancelled by emergency handling. Uncertain close orders block duplicate closes. A durable, validated-but-not-submitted close intent may be resumed by the same PE-03 coordinator after broker/local exposure preflight.
+- Before closing, the service reconciles signed SENSEX broker net quantities with durable LIVE position fills and checks the broker order book. Unknown/unmanaged SENSEX exposure or uncorrelated active SENSEX orders are not adopted as fabricated fills and block automated flattening.
+- Each managed position is reconstructed from its immutable durable plan and the current contract master, then closed through LiveMultiLegExecutionCoordinator. Its short legs are bought back before protective long legs are sold. Closing LIMIT prices use fresh validated bid/ask quotes, current tick sizes and marketable-side rounding. Exact individual trade-history fills are required; bounded replacements are permitted only after terminal/cancel-confirmed prior orders.
+- After closure, the service backfills current-session trade history again, verifies all durable positions and orders are terminal/flat, and independently re-reads Kite net positions and active SENSEX orders. Local CLOSED status alone is never accepted as proof of broker flatness.
+- If broker authentication, static IP, persistence, quote quality, order correlation, cancellation, fill projection or final reconciliation fails, the workflow stops or leaves remaining managed positions for explicit residual reporting. It never claims success while exposure is unverified.
+- PositionLifecycle.finalize_flat supports positions with zero recorded exposure only through an explicit durable flat-finalization event. Generic status transitions cannot manually mark an open position CLOSED.
+- The emergency service is the only runtime caller of the PE-03 coordinator. It invokes CLOSE only; it never invokes OPEN or normal strategy entry. The durable submission/coordinator enable flags are explicitly enabled only within this close-only service.
+- PE-05 is a close-only safety path. It does not bypass PE-06 risk accounting for new live entries, auto-resume after emergency, deploy, or place any order during implementation.
