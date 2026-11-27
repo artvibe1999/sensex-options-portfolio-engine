@@ -318,6 +318,7 @@ class EmergencyCloseAllService:
             unresolved.append("FINAL_FILL_BACKFILL")
             reasons.append(f"Final trade-history backfill failed: {type(exc).__name__}")
 
+        final_position_blocked = False
         for snapshot in self._positions.active_snapshots():
             if str(snapshot.get("mode", "")).lower() != "live":
                 continue
@@ -332,10 +333,10 @@ class EmergencyCloseAllService:
                     reasons.append(
                         f"Flat position {position_id} could not be finalized: {type(exc).__name__}"
                     )
-                    unresolved.append(f"POSITION:{position_id}")
+                    final_position_blocked = True
             else:
                 reasons.append(f"Position {position_id} retains durable open exposure")
-                unresolved.append(f"POSITION:{position_id}")
+                final_position_blocked = True
 
         for order in self._orders.active_snapshots():
             if str(order.get("mode", "")).lower() == "live":
@@ -348,7 +349,10 @@ class EmergencyCloseAllService:
             contracts, require_no_open_orders=True
         )
         reasons.extend(final_issues)
-        completed = not residuals and not final_issues and not unresolved
+        completed = (
+            not residuals and not final_issues and not unresolved
+            and not final_position_blocked
+        )
         return self._report(
             run_id, cancelled, closed, unresolved, residuals, reasons,
             completed=completed,
