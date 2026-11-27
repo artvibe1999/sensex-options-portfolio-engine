@@ -235,3 +235,52 @@ def test_partial_close_order_quantity_can_be_smaller_than_original_leg(tmp_path)
 
     assert result["position"]["legs"][0]["remaining_quantity"] == 6
     assert result["position"]["status"] == "CLOSING"
+
+
+def test_late_fill_after_cancel_ack_is_ingested_from_terminal_order(tmp_path):
+    service, orders, positions = setup_ingestion(tmp_path)
+    orders.transition(
+        order_id="order-open-long",
+        new_state=OrderState.CANCELLED,
+        update_id="cancelled",
+    )
+
+    result = service.ingest(event(quantity=3, broker_trade_id="late-trade"))
+
+    assert result.order_event_created is True
+    assert result.order_state == OrderState.PARTIALLY_FILLED.value
+    assert orders.snapshot("order-open-long")["filled_quantity"] == 3
+    assert positions.snapshot("position-1")["legs"][0]["opened_quantity"] == 3
+
+
+def test_same_broker_order_id_cannot_be_correlated_to_two_intents(tmp_path):
+    service, orders, _ = setup_ingestion(tmp_path)
+    orders.create_intent(
+        order_id="duplicate-broker-id",
+        position_id="position-1",
+        leg_index=1,
+        instrument_token=1002,
+        tradingsymbol="SENSEX_CE2",
+        side="SELL",
+        quantity=10,
+        order_type="LIMIT",
+        product="MIS",
+        mode="paper",
+        idempotency_key="duplicate-broker-id-create",
+    )
+    for state, update in (
+        (OrderState.VALIDATED, "v"),
+        (OrderState.SUBMITTING, "s"),
+    ):
+        orders.transition(
+            order_id="duplicate-broker-id",
+            new_state=state,
+            update_id=update,
+        )
+    with pytest.raises(ValueError, match="already assigned"):
+        orders.transition(
+            order_id="duplicate-broker-id",
+            new_state=OrderState.ACKNOWLEDGED,
+            update_id="ack",
+            broker_order_id="kite-order-1",
+        )
