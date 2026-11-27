@@ -273,6 +273,21 @@ class OrderLifecycle:
         state["remaining_quantity"] = int(state["quantity"]) - int(state["filled_quantity"])
         return state
 
+    def active_snapshots(self) -> list[dict[str, Any]]:
+        """Return non-terminal order projections in stable order."""
+        terminal = {
+            OrderState.FILLED.value,
+            OrderState.CANCELLED.value,
+            OrderState.REJECTED.value,
+            OrderState.EXPIRED.value,
+        }
+        snapshots = []
+        for order_id in self.store.aggregate_ids_for_event("ORDER_INTENT_CREATED"):
+            snapshot = self.snapshot(order_id)
+            if snapshot is not None and snapshot["state"] not in terminal:
+                snapshots.append(snapshot)
+        return sorted(snapshots, key=lambda item: str(item["order_id"]))
+
     @staticmethod
     def _average_fill_price(events: list[dict[str, Any]]) -> str | None:
         fills = [event["payload"] for event in events
