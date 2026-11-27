@@ -143,3 +143,25 @@ class SqliteStore:
             }
             for row in rows
         ]
+
+
+    def update_command_outcome(
+        self,
+        *,
+        command_id: str,
+        outcome: str,
+        detail: str = "",
+    ) -> bool:
+        """Finalize a previously persisted command receipt."""
+        if not command_id.strip() or not outcome.strip():
+            raise ValueError("Command identity and outcome are required")
+        with self._connection() as connection:
+            cursor = connection.execute(
+                """
+                UPDATE command_audit
+                SET outcome = ?, detail = ?
+                WHERE command_id = ?
+                """,
+                (outcome, detail[:500], command_id),
+            )
+            return cursor.rowcount == 1
