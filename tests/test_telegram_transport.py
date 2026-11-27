@@ -1,4 +1,6 @@
 import asyncio
+
+import pytest
 from types import SimpleNamespace
 
 from sensex_engine.domain import TradingMode
@@ -10,6 +12,7 @@ from sensex_engine.telegram_transport import (
     _sqlite_database_path,
     dispatch_command,
     operations_from_settings,
+    run_startup_recovery_from_settings,
 )
 
 
@@ -146,3 +149,86 @@ def test_telegram_entrypoint_accepts_only_sqlite_database_urls():
         assert "SQLite DATABASE_URL" in str(exc)
     else:
         raise AssertionError("unsupported database URL must be rejected")
+
+
+class StartupBroker:
+    def __init__(self, authenticated=True):
+        self.authenticated = authenticated
+        self.trade_history_calls = []
+
+    def is_authenticated(self):
+        return self.authenticated
+
+    def instruments(self):
+        return [SimpleNamespace(
+            instrument_token=1001,
+            tradingsymbol="SENSEX_TEST_CE",
+            lot_size=10,
+        )]
+
+    def positions(self):
+        return {"net": []}
+
+    def orders(self):
+        return []
+
+    def order_trades(self, broker_order_id):
+        self.trade_history_calls.append(broker_order_id)
+        return []
+
+
+def test_runtime_startup_runs_read_only_recovery_before_marking_gate_complete(tmp_path):
+    store = SqliteStore(tmp_path / "startup-runtime.sqlite3")
+    operations = _operations()
+    broker = StartupBroker()
+    settings = SimpleNamespace(
+        kite_api_key="api-key",
+        kite_access_token="access-token",
+    )
+
+    result = run_startup_recovery_from_settings(
+        settings,
+        store=store,
+        operations=operations,
+        broker_factory=lambda api_key, access_token: broker,
+    )
+
+    assert result is not None and result.recovery_complete
+    assert operations.startup_recovery_complete
+    assert broker.trade_history_calls == []
+
+
+def test_runtime_startup_without_kite_credentials_keeps_gate_closed(tmp_path):
+    store = SqliteStore(tmp_path / "startup-no-creds.sqlite3")
+    operations = _operations()
+    settings = SimpleNamespace(kite_api_key="", kite_access_token="")
+
+    result = run_startup_recovery_from_settings(
+        settings,
+        store=store,
+        operations=operations,
+        broker_factory=lambda *_: pytest.fail("broker must not be constructed"),
+    )
+
+    assert result is None
+    assert not operations.startup_recovery_complete
+
+
+def test_runtime_startup_reconciliation_failure_keeps_gate_closed(tmp_path):
+    store = SqliteStore(tmp_path / "startup-fail.sqlite3")
+    operations = _operations()
+    broker = StartupBroker(authenticated=False)
+    settings = SimpleNamespace(
+        kite_api_key="api-key",
+        kite_access_token="access-token",
+    )
+
+    result = run_startup_recovery_from_settings(
+        settings,
+        store=store,
+        operations=operations,
+        broker_factory=lambda *_: broker,
+    )
+
+    assert result is not None and not result.recovery_complete
+    assert not operations.startup_recovery_complete
