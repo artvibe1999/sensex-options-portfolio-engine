@@ -23,8 +23,17 @@ class OperationsController:
         if not self.allowlist.allows(user_id, chat_id):
             raise PermissionError("Telegram user/chat is not authorized")
         normalized = command.strip().split()[0].lower() if command.strip() else ""
-        if normalized in {"/status", "/help"}:
-            return f"mode={self.mode.mode.value}; paused={self.paused}"
+        if normalized == "/status":
+            pending = self.mode.live_requested_by is not None
+            return (
+                f"mode={self.mode.mode.value}; paused={self.paused}; "
+                f"live_confirmation_pending={pending}"
+            )
+        if normalized == "/help":
+            return (
+                "Commands: /status /paper /live /confirm_live /pause /resume. "
+                "Read-only portfolio queries and position closure are not enabled yet."
+            )
         if normalized == "/paper":
             self.mode.force_paper()
             self.paused = True
