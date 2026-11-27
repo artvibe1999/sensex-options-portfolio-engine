@@ -33,7 +33,10 @@ def test_account_ledger_persists_cash_flows_and_separates_them_from_profit(tmp_p
         broker_net_equity=Decimal("108200"), unrealized_pnl=Decimal("-700"),
         available_margin=Decimal("50000"), open_max_loss=Decimal("2500"),
         open_positions=1, entries_today=1, reconciliation_id="recon-1",
-        reconciliation_report=ReconciliationReport(True, ((1, -1),), ((1, -1),), (), ()), marked_at=now,
+        reconciliation_report=ReconciliationReport(
+            True, ((1, -1),), ((1, -1),), (), (),
+        ),
+        marked_at=now,
     )
     snapshot = account.snapshot(now=now)
     assert snapshot is not None
@@ -80,7 +83,8 @@ def test_snapshot_fails_closed_without_opening_or_fresh_reconciled_mark(tmp_path
         broker_net_equity=Decimal("50000"), unrealized_pnl=Decimal("0"),
         available_margin=Decimal("30000"), open_max_loss=Decimal("0"),
         open_positions=0, entries_today=0, reconciliation_id="old",
-        reconciliation_report=ReconciliationReport(True, (), (), (), ()), marked_at=now - timedelta(minutes=5),
+        reconciliation_report=ReconciliationReport(True, (), (), (), ()),
+        marked_at=now - timedelta(minutes=5),
     )
     assert account.snapshot(now=now, max_mark_age=timedelta(minutes=2)) is None
 
@@ -159,7 +163,10 @@ def test_strategy_lot_sizing_uses_live_equity_risk_allocation_and_margin(tmp_pat
         broker_net_equity=Decimal("100000"), unrealized_pnl=Decimal("0"),
         available_margin=Decimal("10000"), open_max_loss=Decimal("1000"),
         open_positions=1, entries_today=1, reconciliation_id="sizing",
-        reconciliation_report=ReconciliationReport(True, ((1, 1),), ((1, 1),), (), ()), marked_at=now,
+        reconciliation_report=ReconciliationReport(
+            True, ((1, 1),), ((1, 1),), (), (),
+        ),
+        marked_at=now,
     )
     lots = account.size_strategy_lots(
         strategy_risk_pct=Decimal("0.01"),
