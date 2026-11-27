@@ -164,7 +164,7 @@ class LiveAccountingRefresh:
         # Do not append unverified financial facts until the full projection balances.
         existing = self.account._events()
         expected_keys = {"account:statement-opening"}
-        expected_keys.update(f"account:flow:{flow[\'id\']}" for flow, _, _ in flows)
+        expected_keys.update(f"account:flow:{flow['id']}" for flow, _, _ in flows)
         expected_keys.update(f"account:fill:{fid}" for fid, _, _, _ in results)
         if any(e["idempotency_key"] not in expected_keys for e in existing
                if e["event_type"] in {
