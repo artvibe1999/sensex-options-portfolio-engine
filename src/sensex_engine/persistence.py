@@ -217,7 +217,9 @@ class SqliteStore:
                         if prior.get("status"):
                             status = prior["status"]
                 if expected_status is not None and status != expected_status:
-                    raise RuntimeError("Position status changed concurrently; reload before retrying")
+                    raise RuntimeError(
+                        "Position status changed concurrently; reload before retrying"
+                    )
                 if event_type == "POSITION_STATUS_CHANGED":
                     target = payload.get("status")
                     allowed = {
@@ -228,14 +230,20 @@ class SqliteStore:
                         "CLOSED": set(),
                     }
                     if target not in allowed.get(status, set()):
-                        raise ValueError(f"Invalid position transition: {status} -> {target}")
+                        raise ValueError(
+                            f"Invalid position transition: {status} -> {target}"
+                        )
                 elif event_type == "POSITION_LEG_FILL_RECORDED":
                     if fill_phase not in {"OPEN", "CLOSE"} or leg_index not in legs or fill_quantity <= 0:
                         raise ValueError("Invalid position leg fill")
                     if fill_phase == "OPEN" and status != "PENDING":
-                        raise ValueError("Opening fills are accepted only while position is PENDING")
+                        raise ValueError(
+                            "Opening fills are accepted only while position is PENDING"
+                        )
                     if fill_phase == "CLOSE" and status != "CLOSING":
-                        raise ValueError("Closing fills are accepted only while position is CLOSING")
+                        raise ValueError(
+                            "Closing fills are accepted only while position is CLOSING"
+                        )
                     opened = open_fills.get(leg_index, 0)
                     closed = close_fills.get(leg_index, 0)
                     limit = int(legs[leg_index]["quantity"])
