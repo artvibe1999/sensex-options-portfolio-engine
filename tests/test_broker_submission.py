@@ -1,5 +1,4 @@
 import pytest
-
 from sensex_engine.broker_submission import (
     BrokerOrderReceipt,
     BrokerOrderStatus,
