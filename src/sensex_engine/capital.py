@@ -44,10 +44,18 @@ def adaptive_risk_budget(
 ) -> AdaptiveRiskBudget:
     """Reduce risk as peak-to-current drawdown rises; never scale beyond base."""
     if equity <= 0 or peak_equity <= 0:
-        return AdaptiveRiskBudget(Decimal("0"), Decimal("0"), Decimal("0"), False, "Invalid equity")
+        return AdaptiveRiskBudget(
+            Decimal("0"), Decimal("0"), Decimal("0"), False, "Invalid equity"
+        )
     drawdown = max(Decimal("0"), (peak_equity - equity) / peak_equity)
     if drawdown >= Decimal("0.10"):
-        return AdaptiveRiskBudget(\n            Decimal("0"), Decimal("0"), Decimal("0"), False,\n            "Trading suspended at 10% drawdown",\n        )
+        return AdaptiveRiskBudget(
+            Decimal("0"),
+            Decimal("0"),
+            Decimal("0"),
+            False,
+            "Trading suspended at 10% drawdown",
+        )
     multiplier = Decimal("1")
     reason = "Normal risk budget"
     if drawdown >= Decimal("0.07"):
