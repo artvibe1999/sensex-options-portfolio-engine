@@ -1,6 +1,6 @@
 """Dynamic equity accounting and risk-budget sizing helpers."""
 from dataclasses import dataclass
-from decimal import Decimal, ROUND_FLOOR
+from decimal import ROUND_FLOOR, Decimal
 
 
 @dataclass(frozen=True)
@@ -47,7 +47,7 @@ def adaptive_risk_budget(
         return AdaptiveRiskBudget(Decimal("0"), Decimal("0"), Decimal("0"), False, "Invalid equity")
     drawdown = max(Decimal("0"), (peak_equity - equity) / peak_equity)
     if drawdown >= Decimal("0.10"):
-        return AdaptiveRiskBudget(Decimal("0"), Decimal("0"), Decimal("0"), False, "Trading suspended at 10% drawdown")
+        return AdaptiveRiskBudget(\n            Decimal("0"), Decimal("0"), Decimal("0"), False,\n            "Trading suspended at 10% drawdown",\n        )
     multiplier = Decimal("1")
     reason = "Normal risk budget"
     if drawdown >= Decimal("0.07"):
