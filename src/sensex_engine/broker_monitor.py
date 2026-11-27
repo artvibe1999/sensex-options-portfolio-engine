@@ -160,6 +160,9 @@ class KiteBrokerMonitor:
                 await self._wait_or_stop(min(5, max(1, self._poll_interval // 3)))
                 if self._stop.is_set():
                     break
+                if self._poll_task is None or self._poll_task.done():
+                    await self._set_unhealthy("broker fill poller worker is not running")
+                    break
                 origin = self._last_success_monotonic or self._started_monotonic
                 if origin is None or time.monotonic() - origin > self._stale_after:
                     await self._set_unhealthy("broker monitoring data is stale")
