@@ -77,10 +77,7 @@ class EmergencyCloseAllService:
         coordinator: LiveMultiLegExecutionCoordinator,
         store: Any,
         static_ip_confirmed: bool,
-        max_quote_age_seconds: int = 2,
     ) -> None:
-        if max_quote_age_seconds < 1 or max_quote_age_seconds > 5:
-            raise ValueError("Emergency quote age must be between 1 and 5 seconds")
         self._operations = operations
         self._broker = broker
         self._contracts_provider = contracts_provider
@@ -91,7 +88,6 @@ class EmergencyCloseAllService:
         self._coordinator = coordinator
         self._store = store
         self._static_ip_confirmed = static_ip_confirmed
-        self._max_quote_age_seconds = max_quote_age_seconds
         self._lock = Lock()
 
     def execute(self) -> EmergencyCloseReport:
@@ -155,24 +151,36 @@ class EmergencyCloseAllService:
         if not self._static_ip_confirmed:
             return EmergencyCloseReport(
                 run_id, False, True, (), (), (), (),
-                ("Kite static order-placement IP is not confirmed; broker order actions refused",),
+                (
+                    "Kite static order-placement IP is not confirmed; broker order actions refused",
+                    "Broker exposure remains unverified because execution preflight was blocked",
+                ),
             )
         if not self._store.health_check():
             return EmergencyCloseReport(
                 run_id, False, True, (), (), (), (),
-                ("Durable portfolio storage health check failed",),
+                (
+                    "Durable portfolio storage health check failed",
+                    "Broker exposure remains unverified because durable reconciliation is unavailable",
+                ),
             )
         if not self._broker.is_authenticated():
             return EmergencyCloseReport(
                 run_id, False, True, (), (), (), (),
-                ("Kite authentication is unavailable",),
+                (
+                    "Kite authentication is unavailable",
+                    "Broker exposure remains unverified; no close order was attempted",
+                ),
             )
 
         contracts = self._contracts_provider()
         if not isinstance(contracts, list) or not contracts:
             return EmergencyCloseReport(
                 run_id, False, True, (), (), (), (),
-                ("Current BFO SENSEX contract master is unavailable",),
+                (
+                    "Current BFO SENSEX contract master is unavailable",
+                    "Broker exposure remains unverified; contract-safe closure is blocked",
+                ),
             )
         by_token = {item.instrument_token: item for item in contracts}
         by_symbol = {item.tradingsymbol: item for item in contracts}
