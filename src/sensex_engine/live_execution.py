@@ -173,6 +173,22 @@ class LiveMultiLegExecutionCoordinator:
         if snapshot["status"] not in {"OPEN", "PENDING", "ERROR", "CLOSING"}:
             return self._report(position_id, ExecutionPhase.CLOSE, (), False, True,
                                 "Position state does not permit a close sequence")
+        unresolved_open_orders = [
+            order for order in self._orders.all_snapshots()
+            if order.get("position_id") == position_id
+            and ":OPEN:" in str(order.get("order_id", ""))
+            and order["state"] not in {
+                OrderState.FILLED.value, OrderState.CANCELLED.value,
+                OrderState.REJECTED.value, OrderState.EXPIRED.value,
+            }
+            and not order.get("cancel_confirmed", False)
+        ]
+        if unresolved_open_orders:
+            self._mark_position_error(position_id, "Opening order remains unresolved")
+            return self._report(
+                position_id, ExecutionPhase.CLOSE, (), False, True,
+                "Close blocked until every opening order is broker-terminal",
+            )
         if snapshot["status"] != "CLOSING":
             self._positions.transition(
                 position_id=position_id,
