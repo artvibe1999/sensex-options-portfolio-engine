@@ -34,7 +34,10 @@ class EmergencyCloseReport:
     reasons: tuple[str, ...]
 
     def to_text(self) -> str:
-        status = "COMPLETE — BROKER SENSEX EXPOSURE VERIFIED FLAT" if self.completed else "INCOMPLETE — RESIDUAL OR UNRESOLVED EXPOSURE"
+        status = (
+            "COMPLETE — BROKER SENSEX EXPOSURE VERIFIED FLAT"
+            if self.completed else "INCOMPLETE — RESIDUAL OR UNRESOLVED EXPOSURE"
+        )
         lines = [
             f"EMERGENCY CLOSE-ALL: {status}",
             f"Run: {self.run_id}",
@@ -340,11 +343,15 @@ class EmergencyCloseAllService:
                 continue
             if token is None:
                 if quantity and symbol.startswith("SENSEX"):
-                    issues.append(f"Unmapped non-zero SENSEX broker position: {symbol or token_value}")
+                    issues.append(
+                        f"Unmapped non-zero SENSEX broker position: {symbol or token_value}"
+                    )
                 continue
             if token not in symbol_by_token:
                 if quantity and symbol.startswith("SENSEX"):
-                    issues.append(f"SENSEX position token {token} is absent from current contract master")
+                    issues.append(
+                        f"SENSEX position token {token} is absent from current contract master"
+                    )
                 continue
             actual[token] = actual.get(token, 0) + quantity
 
@@ -405,7 +412,9 @@ class EmergencyCloseAllService:
             token = int(item["instrument_token"])
             contract = contracts.get(token)
             if contract is None or contract.tradingsymbol != str(item["tradingsymbol"]):
-                raise ValueError("Position contract is absent from refreshed SENSEX contract master")
+                raise ValueError(
+                    "Position contract is absent from refreshed SENSEX contract master"
+                )
             quantity = int(item["quantity"])
             if quantity <= 0 or quantity % contract.lot_size:
                 raise ValueError("Position plan is not a whole number of current contract lots")
