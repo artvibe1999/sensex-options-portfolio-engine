@@ -118,3 +118,24 @@ def test_allowlist_requires_both_user_and_chat():
     assert allow.allows(1, 10)
     assert not allow.allows(1, 11)
     assert not allow.allows(None, 10)
+
+def test_risk_engine_reduces_trade_budget_after_equity_drawdown():
+    portfolio = make_portfolio()
+    portfolio = PortfolioSnapshot(
+        net_liquidation_equity=Decimal("48000"),
+        available_margin=portfolio.available_margin,
+        open_max_loss=Decimal("0"),
+        daily_realized_pnl=Decimal("0"),
+        daily_unrealized_pnl=Decimal("0"),
+        peak_equity=Decimal("50000"),
+    )
+    decision = RiskEngine().evaluate(
+        make_candidate(),
+        portfolio,
+        estimated_margin=Decimal("1000"),
+        data_is_fresh=True,
+        contracts_are_current=True,
+        broker_reconciled=True,
+    )
+    assert not decision.approved
+    assert "adaptive per-trade" in decision.reason
