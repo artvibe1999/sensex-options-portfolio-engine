@@ -100,6 +100,7 @@ class OrderLifecycle:
         mode: str,
         idempotency_key: str,
         client_order_key: str | None = None,
+        limit_price: Decimal | None = None,
     ) -> bool:
         if not all(value.strip() for value in (
             order_id, position_id, tradingsymbol, side, order_type, product, mode,
@@ -112,6 +113,13 @@ class OrderLifecycle:
             raise ValueError("Order side must be BUY or SELL")
         if mode.lower() not in {"paper", "live"}:
             raise ValueError("Order mode must be paper or live")
+        if limit_price is not None:
+            try:
+                limit_price = Decimal(limit_price)
+            except (InvalidOperation, TypeError, ValueError) as exc:
+                raise ValueError("Limit price must be a valid decimal") from exc
+            if not limit_price.is_finite() or limit_price <= 0:
+                raise ValueError("Limit price must be positive and finite")
         if client_order_key is None:
             client_order_key = "sx" + sha256(order_id.encode("utf-8")).hexdigest()[:22]
         if not client_order_key.strip() or len(client_order_key) > 64:
@@ -136,6 +144,7 @@ class OrderLifecycle:
                     "product": product.upper(),
                     "mode": mode.lower(),
                     "client_order_key": client_order_key,
+                    "limit_price": str(limit_price) if limit_price is not None else None,
                     "state": OrderState.CREATED.value,
                     "filled_quantity": 0,
                 },
