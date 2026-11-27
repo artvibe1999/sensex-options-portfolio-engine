@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 import pytest
 
 from sensex_engine.broker_submission import (
@@ -18,7 +20,7 @@ ACTION = LegExecutionAction(
 )
 
 
-def make_lifecycle(tmp_path, *, mode="live", database_name="broker.sqlite3"):
+def make_lifecycle(tmp_path, *, mode="live", database_name="broker.sqlite3", limit_price=None):
     lifecycle = OrderLifecycle(SqliteStore(tmp_path / database_name))
     lifecycle.create_intent(
         order_id="internal-1",
@@ -33,6 +35,7 @@ def make_lifecycle(tmp_path, *, mode="live", database_name="broker.sqlite3"):
         mode=mode,
         idempotency_key="intent-1",
         client_order_key="sx-test-order-0001",
+        limit_price=limit_price,
     )
     lifecycle.transition(
         order_id="internal-1",
@@ -282,4 +285,25 @@ def test_malformed_lookup_response_requires_manual_recovery(tmp_path):
 
     result = service.recover("internal-1")
     assert result.state is OrderState.RECOVERY_REQUIRED
+    assert len(broker.submit_calls) == 1
+
+
+
+def test_live_limit_price_must_match_immutable_durable_intent(tmp_path):
+    lifecycle = make_lifecycle(tmp_path, limit_price="100.05")
+    broker = FakeBroker()
+    service = DurableBrokerSubmissionService(
+        lifecycle, broker, live_submission_enabled=True
+    )
+    matching = LegExecutionAction(
+        0, 123, "SENSEX_TEST_CE", "BUY", 20, Decimal("100.05")
+    )
+    changed = LegExecutionAction(
+        0, 123, "SENSEX_TEST_CE", "BUY", 20, Decimal("100.10")
+    )
+    with pytest.raises(ValueError, match="limit price"):
+        service.submit_once("internal-1", changed)
+    assert broker.submit_calls == []
+    outcome = service.submit_once("internal-1", matching)
+    assert outcome.state is OrderState.ACKNOWLEDGED
     assert len(broker.submit_calls) == 1
