@@ -241,6 +241,11 @@ def test_late_fill_after_cancel_ack_is_ingested_from_terminal_order(tmp_path):
     service, orders, positions = setup_ingestion(tmp_path)
     orders.transition(
         order_id="order-open-long",
+        new_state=OrderState.CANCEL_PENDING,
+        update_id="cancel-pending",
+    )
+    orders.transition(
+        order_id="order-open-long",
         new_state=OrderState.CANCELLED,
         update_id="cancelled",
     )
