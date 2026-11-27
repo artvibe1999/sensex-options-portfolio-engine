@@ -318,6 +318,7 @@ def build_application_from_settings(
                 sizing = EntrySizingService(
                     broker=runtime_broker, snapshot_provider=portfolio_snapshot_provider,
                     risk=RiskEngine(limits),
+                    quantity_freeze_units=getattr(settings, "bfo_sensex_freeze_quantity", 1000),
                 )
 
                 def entry_allowed() -> bool:
