@@ -42,7 +42,7 @@ class OperationsController:
         if normalized == "/help":
             return (
                 "Commands: /status /paper /live /confirm_live /pause /resume /positions /orders "
-                "/closeall /emergency. "
+                "/pnl /capital /risk /strategies /closeall /emergency. "
                 "Emergency close-all immediately halts entries and forces paper mode."
             )
         if normalized == "/paper":
