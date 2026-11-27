@@ -176,8 +176,8 @@ def build_application_from_settings(
     """
     store = SqliteStore(_sqlite_database_path(settings.database_url))
     from .order_lifecycle import OrderLifecycle
-    from .position_lifecycle import PositionLifecycle
     from .portfolio_queries import PortfolioQueryService
+    from .position_lifecycle import PositionLifecycle
 
     portfolio_queries = PortfolioQueryService(
         positions=PositionLifecycle(store),
