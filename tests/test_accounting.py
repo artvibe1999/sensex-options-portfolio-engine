@@ -93,7 +93,7 @@ def test_snapshot_rejects_disagreement_with_broker_net_equity(tmp_path):
         broker_net_equity=Decimal("52000"), unrealized_pnl=Decimal("0"),
         available_margin=Decimal("30000"), open_max_loss=Decimal("0"),
         open_positions=0, entries_today=0, reconciliation_id="mismatch",
-        broker_positions_hash="sha256:empty", marked_at=now,
+        reconciliation_report=ReconciliationReport(True, (), (), (), ()), marked_at=now,
     )
     assert account.snapshot(now=now) is None
 
