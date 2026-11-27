@@ -8,6 +8,7 @@ they are never interpreted as permission to retry.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 from enum import StrEnum
 from typing import Protocol
 
@@ -276,6 +277,15 @@ class DurableBrokerSubmissionService:
             or snapshot["quantity"] != action.quantity
         ):
             raise ValueError("Execution action does not match persisted order intent")
+        persisted_price = snapshot.get("limit_price")
+        if (
+            (persisted_price is None) != (action.limit_price is None)
+            or (
+                persisted_price is not None
+                and Decimal(str(persisted_price)) != Decimal(action.limit_price)
+            )
+        ):
+            raise ValueError("Execution limit price does not match persisted order intent")
         if not snapshot.get("client_order_key"):
             raise ValueError("Persisted client order key is required")
         return snapshot
