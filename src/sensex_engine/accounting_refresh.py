@@ -91,6 +91,7 @@ class LiveAccountingRefresh:
             raise ValueError("Broker exposure or orders are not reconciled")
         charges = data["charges_by_fill"]
         unrealized = Decimal("0")
+        marked_value = Decimal("0")
         seen = set()
         entries = 0
         family_risk: dict[str, Decimal] = {}
@@ -152,6 +153,7 @@ class LiveAccountingRefresh:
                     long = leg["side"] == "BUY"
                     mark = quote.bid if long else quote.ask
                     position_pnl += (mark - avg) * qty * (1 if long else -1)
+                    marked_value += mark * qty * (1 if long else -1)
                     if qty != leg["remaining_quantity"]:
                         raise ValueError("Fill cost basis differs from durable exposure")
                     leg["open_average_price"] = str(avg)
@@ -171,6 +173,11 @@ class LiveAccountingRefresh:
             raise ValueError("Broker equity segment is disabled")
         equity = _decimal(data["net_liquidation_equity"], "statement equity")
         cash = _decimal(data["cash_balance"], "statement cash")
+        liabilities = _decimal(data.get("liabilities", "0"), "statement liabilities")
+        if liabilities < 0:
+            raise ValueError("Statement liabilities must be non-negative")
+        if abs(cash + marked_value - liabilities - equity) > Decimal("1.00"):
+            raise ValueError("Cash, marked exposure and liabilities disagree with equity")
         if abs(expected_equity + unrealized - equity) > Decimal("1.00"):
             raise ValueError("Independent statement disagrees with reconstructed equity")
         # Do not append unverified financial facts until the full projection balances.
