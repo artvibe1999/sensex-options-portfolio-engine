@@ -124,11 +124,12 @@ class DurableBrokerSubmissionService:
                 "Malformed broker response; lookup and reconcile before any retry",
             )
 
-        state = (
-            OrderState.REJECTED
-            if receipt.status is BrokerOrderStatus.REJECTED
-            else OrderState.ACKNOWLEDGED
-        )
+        if receipt.status is BrokerOrderStatus.REJECTED:
+            state = OrderState.REJECTED
+        elif receipt.status is BrokerOrderStatus.CANCELLED:
+            state = OrderState.CANCELLED
+        else:
+            state = OrderState.ACKNOWLEDGED
         try:
             self._lifecycle.transition(
                 order_id=order_id,
