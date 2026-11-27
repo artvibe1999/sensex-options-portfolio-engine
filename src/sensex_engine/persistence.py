@@ -157,7 +157,9 @@ class SqliteStore:
                     or prior["aggregate_id"] != aggregate_id
                     or prior["payload_json"] != encoded
                 ):
-                    raise ValueError("Account event idempotency key conflicts with an existing event")
+                    raise ValueError(
+                        "Account event idempotency key conflicts with an existing event"
+                    )
                 connection.commit()
                 return False
             if event_type == "ACCOUNT_OPENED":
@@ -167,7 +169,9 @@ class SqliteStore:
                     (aggregate_id,),
                 ).fetchone()
                 if exists is not None:
-                    raise ValueError("Opening equity is immutable once the account ledger is opened")
+                    raise ValueError(
+                        "Opening equity is immutable once the account ledger is opened"
+                    )
             connection.execute(
                 "INSERT INTO portfolio_events "
                 "(idempotency_key, event_type, aggregate_id, payload_json, created_at) "
