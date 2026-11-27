@@ -259,7 +259,7 @@ status. The returned broker order ID must match the requested ID. A cancel respo
 is only a cancel-request acknowledgement; final cancellation and any racing fills
 must still be acquired through PE-01 fill ingestion and reconciliation.
 
-A conservative per-process throttle spaces order API calls by at least 160 ms.
+A conservative per-process throttle spaces adapter preflight and order API calls by at least 160 ms.
 This is a local guard, not a global guarantee across multiple processes or other
 clients sharing the same Kite API key. Kite's documented API limits remain the
 ultimate external constraint. Durable intent price is persisted and compared
