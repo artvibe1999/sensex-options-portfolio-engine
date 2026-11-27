@@ -133,7 +133,12 @@ def test_operations_factory_uses_configured_telegram_allowlists():
 def test_telegram_entrypoint_accepts_only_sqlite_database_urls():
     assert _sqlite_database_path("sqlite:///./portfolio.db") == "./portfolio.db"
     assert _sqlite_database_path("sqlite:////var/lib/portfolio.db") == "/var/lib/portfolio.db"
-    assert _sqlite_database_path("sqlite:///:memory:") == ":memory:"
+    try:
+        _sqlite_database_path("sqlite:///:memory:")
+    except ValueError as exc:
+        assert "In-memory SQLite is unsupported" in str(exc)
+    else:
+        raise AssertionError("ephemeral audit storage must be rejected")
     try:
         _sqlite_database_path("postgresql://localhost/portfolio")
     except ValueError as exc:
