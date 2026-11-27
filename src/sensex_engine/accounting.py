@@ -144,6 +144,7 @@ class PortfolioAccountingService:
         reconciliation_report: ReconciliationReport,
         marked_at: datetime | None = None,
         actual_cash: Decimal | None = None,
+        strategy_open_risk: dict[str, Decimal] | None = None,
     ) -> bool:
         values = {
             "broker_net_equity": _decimal(broker_net_equity, "broker_net_equity"),
@@ -187,6 +188,14 @@ class PortfolioAccountingService:
             raise ValueError("Equity mark timestamp must be timezone-aware")
         if not any(e["event_type"] == "ACCOUNT_OPENED" for e in self._events()):
             raise RuntimeError("Set the explicit opening equity before recording broker marks")
+        family_risk = {
+            family: _decimal(amount, "strategy open risk")
+            for family, amount in (strategy_open_risk or {}).items()
+        }
+        if any(not family or amount < 0 for family, amount in family_risk.items()):
+            raise ValueError("Invalid strategy-family open risk")
+        if strategy_open_risk is not None and sum(family_risk.values()) != values["open_max_loss"]:
+            raise ValueError("Strategy-family risk does not reconcile to total open risk")
         key = f"mark:{reconciliation_id}"
         return self._append(key, "ACCOUNT_RECONCILED_MARK", {
             **{k: str(v) for k, v in values.items()},
@@ -194,6 +203,7 @@ class PortfolioAccountingService:
             "reconciliation_id": reconciliation_id,
             "broker_positions_hash": positions_hash,
             "marked_at": timestamp.astimezone(UTC).isoformat(),
+            "strategy_open_risk": {k: str(v) for k, v in family_risk.items()},
             "actual_cash": str(_decimal(actual_cash, "actual cash"))
             if actual_cash is not None else None,
         })
@@ -357,6 +367,10 @@ class PortfolioAccountingService:
             daily_realized_pnl=daily_realized,
             daily_unrealized_pnl=unrealized - prior_unrealized,
             start_of_day_equity=start_equity,
+            strategy_open_risk=tuple(sorted(
+                (k, _decimal(v, "strategy open risk"))
+                for k, v in mark.get("strategy_open_risk", {}).items()
+            )),
             weekly_drawdown_pct=period_drawdown(week_start),
             monthly_drawdown_pct=period_drawdown(month_start),
             open_positions=int(mark["open_positions"]),
