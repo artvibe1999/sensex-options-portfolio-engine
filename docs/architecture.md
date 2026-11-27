@@ -269,3 +269,56 @@ The adapter is deliberately not constructed by the Telegram runtime. The durable
 submission service's explicit live-enable flag remains false by default. Connecting
 the adapter to fill-confirmed multi-leg orchestration and full live readiness is
 PE-03/PE-04, not part of this adapter milestone.
+
+
+## Durable live multi-leg execution (PE-03)
+
+`LiveMultiLegExecutionCoordinator` composes the durable order/position ledgers,
+the one-shot broker submission boundary, Kite's LIMIT adapter, and the individual
+trade-history fill ingestor. It is a standalone service and is intentionally not
+constructed by the Telegram runtime; runtime readiness/wiring remains PE-04.
+
+The coordinator requires two independent opt-ins: its own `live_execution_enabled`
+flag and a `DurableBrokerSubmissionService` constructed with live submission
+enabled. Both default to false. It accepts LIVE position plans only and persists
+the immutable position plus each LIMIT/NRML order intent before submission. Price
+is supplied by an injected executable-limit policy and persisted in the intent;
+the Kite adapter performs current BFO contract, tick, lot, authentication and order
+field checks again at the broker boundary.
+
+Opening follows the deterministic protective sequence: BUY legs first, then SELL
+legs. A later leg is not submitted until the prior order's individual trade-history
+fills have been ingested and the durable order ledger confirms the exact requested
+quantity. An OMS acknowledgement, order-book COMPLETE status, or cancel request
+acknowledgement is never substituted for fill facts. Closing follows the inverse
+risk-reduction sequence: buy back short legs before selling protective long legs.
+
+A non-full order is cancelled through a durable CANCEL_PENDING claim. The service
+then refreshes the exact tagged broker order and waits for broker-confirmed
+CANCELLED/REJECTED state before any replacement. Trade-history polling runs after
+cancellation and again after status refresh to capture cancel/fill races. Replacements
+are sized only from the remaining durable position exposure and are bounded by the
+configured close-replacement limit. Derivative residual quantities that are not
+whole current lots are not sent; they remain blocked for manual handling.
+
+A failed opening attempts residual cleanup only after every opening order is either
+fully filled or broker-terminal/cancel-confirmed. Cleanup buys back any filled short
+exposure first and then sells filled protective longs. A close failure, ambiguous
+order, missing broker correlation, unconfirmed cancellation, pending fill-inbox
+receipt, or incomplete trade-history projection blocks further execution and
+leaves the durable position in ERROR with explicit per-leg residual quantities.
+There is no automatic resubmission after SUBMITTING/UNKNOWN; a replacement gets a
+new immutable intent only after the old order is definitively terminal.
+
+Cancellation terminality is preserved independently from fill state. If an
+individual fill arrives after a cancel acknowledgement, the order ledger records
+the late fill while retaining `cancel_confirmed`; the position ledger can reopen
+a previously flat position to CLOSING if a late opening fill is discovered after
+flattening. This ensures reconciliation sees the new residual rather than silently
+discarding the race.
+
+PE-03 is an execution orchestration capability, not a live-trading enablement
+milestone. No Telegram command or runtime path invokes this coordinator until
+PE-04 injects all live readiness, risk, market-data, authentication and persistence
+dependencies. Paper remains the process-start default and no real order was placed
+during implementation.
