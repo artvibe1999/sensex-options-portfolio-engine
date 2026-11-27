@@ -63,12 +63,11 @@ class FillCoordinator:
         order_quantity = int(order["quantity"])
         if order_quantity > int(leg["quantity"]):
             raise ValueError("Order quantity exceeds planned position leg quantity")
-        if normalized_phase == "CLOSE":
-            remaining = int(leg["opened_quantity"]) - int(leg["closed_quantity"])
-            if remaining <= 0 or order_quantity > remaining:
-                raise ValueError("Close order quantity exceeds confirmed remaining exposure")
-        elif int(leg["opened_quantity"]) + order_quantity > int(leg["quantity"]):
-            raise ValueError("Opening order quantity exceeds unfilled planned exposure")
+        # Do not compare the full order quantity with remaining exposure here:
+        # an order can arrive as multiple partial fills, and a previously stored
+        # fill must be replayable to repair the position projection. The SQLite
+        # position-event transaction enforces cumulative open/close capacity for
+        # each new fill while allowing an exact idempotent replay.
         # Persist broker fact first. If projection fails or process stops, replaying this
         # exact fill is safe: the order ledger deduplicates it and projection is retried.
         order_created = self.orders.record_fill(
