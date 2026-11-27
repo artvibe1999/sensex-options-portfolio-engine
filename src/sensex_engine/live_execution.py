@@ -10,9 +10,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import Decimal
+from threading import Lock
 
 from .broker_submission import DurableBrokerSubmissionService
-from .domain import Position, TradingMode
+from .domain import Position, StrategyCandidate, TradingMode
 from .execution import ExecutionPhase, LegExecutionAction, build_leg_execution_plan
 from .order_lifecycle import OrderLifecycle, OrderState
 from .position_lifecycle import PositionLifecycle
@@ -60,6 +61,9 @@ class LiveMultiLegExecutionCoordinator:
         limit_price: Callable[[LegExecutionAction], Decimal],
         live_execution_enabled: bool = False,
         max_close_replacements: int = 1,
+        entry_sizing: object | None = None,
+        entry_allowed: Callable[[], bool] | None = None,
+        require_entry_approval: bool = False,
     ) -> None:
         if max_close_replacements < 0 or max_close_replacements > 3:
             raise ValueError("max_close_replacements must be between 0 and 3")
@@ -70,8 +74,38 @@ class LiveMultiLegExecutionCoordinator:
         self._limit_price = limit_price
         self._enabled = live_execution_enabled
         self._max_close_replacements = max_close_replacements
+        self._entry_sizing = entry_sizing
+        self._entry_allowed = entry_allowed
+        self._require_entry_approval = require_entry_approval
+        self._entry_lock = Lock()
 
     def execute(self, position: Position, phase: ExecutionPhase) -> LiveExecutionReport:
+        if phase is ExecutionPhase.OPEN and self._require_entry_approval:
+            raise PermissionError("Normal live opening requires sized entry approval")
+        return self._execute(position, phase)
+
+    def execute_sized(
+        self, candidate: StrategyCandidate, *, max_lots: int, allocation_pct: Decimal,
+    ) -> LiveExecutionReport:
+        """Normal entry path: serialize approval, sizing and immutable limit execution."""
+        with self._entry_lock:
+            if (
+                not self._enabled or self._entry_sizing is None
+                or self._entry_allowed is None or not self._entry_allowed()
+            ):
+                raise PermissionError("Normal live entry gates are not satisfied")
+            approved, prices = self._entry_sizing.approve(
+                candidate, max_lots=max_lots, allocation_pct=allocation_pct,
+            )
+            if not self._entry_allowed():
+                raise PermissionError("Live entry permission changed during approval")
+            position = Position.create(approved.strategy_id, approved.legs, TradingMode.LIVE)
+            return self._execute(position, ExecutionPhase.OPEN, opening_prices=prices)
+
+    def _execute(
+        self, position: Position, phase: ExecutionPhase,
+        *, opening_prices: dict[int, Decimal] | None = None,
+    ) -> LiveExecutionReport:
         if not self._enabled:
             raise PermissionError("Live multi-leg execution is disabled")
         if position.mode is not TradingMode.LIVE:
@@ -82,7 +116,7 @@ class LiveMultiLegExecutionCoordinator:
         position_id = str(position.position_id)
         if phase is ExecutionPhase.OPEN:
             self._ensure_position(position)
-            return self._open(position, position_id)
+            return self._open(position, position_id, opening_prices=opening_prices)
         return self._close(position, position_id)
 
     def _ensure_position(self, position: Position) -> None:
@@ -118,7 +152,10 @@ class LiveMultiLegExecutionCoordinator:
                     "Position contract or quantity differs from its immutable durable plan"
                 )
 
-    def _open(self, position: Position, position_id: str) -> LiveExecutionReport:
+    def _open(
+        self, position: Position, position_id: str,
+        *, opening_prices: dict[int, Decimal] | None = None,
+    ) -> LiveExecutionReport:
         snapshot = self._positions.snapshot(position_id)
         if snapshot is None:
             raise RuntimeError("Durable position was not created")
@@ -132,6 +169,13 @@ class LiveMultiLegExecutionCoordinator:
         for action in build_leg_execution_plan(position, ExecutionPhase.OPEN):
             order_id = f"{position_id}:OPEN:{action.leg_index}:1"
             try:
+                if opening_prices is not None:
+                    if self._entry_allowed is None or not self._entry_allowed():
+                        raise PermissionError("Entry permission withdrawn during execution")
+                    action = LegExecutionAction(
+                        action.leg_index, action.instrument_token, action.tradingsymbol,
+                        action.side, action.quantity, opening_prices[action.instrument_token],
+                    )
                 outcome = self._execute_order(
                     position_id, order_id, action, ExecutionPhase.OPEN
                 )
@@ -221,7 +265,10 @@ class LiveMultiLegExecutionCoordinator:
     ) -> LiveLegOutcome:
         snapshot = self._orders.snapshot(order_id)
         if snapshot is None:
-            price = self._validated_price(self._limit_price(action))
+            price = self._validated_price(
+                action.limit_price if phase is ExecutionPhase.OPEN
+                and action.limit_price is not None else self._limit_price(action)
+            )
             action = LegExecutionAction(
                 action.leg_index, action.instrument_token, action.tradingsymbol,
                 action.side, action.quantity, price,
