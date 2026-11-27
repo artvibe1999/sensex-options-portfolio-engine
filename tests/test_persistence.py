@@ -89,3 +89,9 @@ def test_broker_fill_inbox_fences_stale_worker_claims(tmp_path):
         result={"status": "processed"},
     )
     assert store.broker_fill_receipt("order-1:trade-1")["status"] == "PROCESSED"
+
+
+
+def test_sqlite_health_check_passes_for_initialized_store(tmp_path):
+    store = SqliteStore(tmp_path / "healthy.sqlite3")
+    assert store.health_check() is True
