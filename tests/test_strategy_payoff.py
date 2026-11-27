@@ -67,3 +67,16 @@ def test_payoff_rejects_mixed_expiry_and_missing_premium():
         assert "single common expiry" in str(exc)
     else:
         raise AssertionError("mixed expiry must be rejected")
+
+
+def test_payoff_rejects_net_short_call_unbounded_risk():
+    from sensex_engine.payoff import calculate_expiry_payoff
+
+    short_call = _item(9, "80000", Right.CE, "500")
+    legs = (OptionLeg(short_call.contract, Side.SELL, 1),)
+    try:
+        calculate_expiry_payoff(legs, {9: short_call.mid_price})
+    except ValueError as exc:
+        assert "unbounded upside risk" in str(exc)
+    else:
+        raise AssertionError("net short call must fail defined-risk validation")
