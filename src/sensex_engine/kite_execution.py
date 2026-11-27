@@ -6,10 +6,10 @@ requires exact tag + contract/order-field agreement. Ambiguity is never retried.
 """
 from __future__ import annotations
 
-from time import monotonic, sleep
 from decimal import Decimal, InvalidOperation
 from hashlib import sha256
 from threading import Lock
+from time import monotonic, sleep
 from typing import Any
 
 from .broker_submission import BrokerOrderReceipt, BrokerOrderStatus
