@@ -77,7 +77,12 @@ class PositionLifecycle:
                 "Leg index must be non-negative"
             )
         phase = phase.upper()
-        if phase not in {"OPEN", "CLOSE"} or not isinstance(quantity, int) or isinstance(quantity, bool) or quantity <= 0:
+        if (
+            phase not in {"OPEN", "CLOSE"}
+            or not isinstance(quantity, int)
+            or isinstance(quantity, bool)
+            or quantity <= 0
+        ):
             raise ValueError(
                 "Invalid fill phase or quantity"
             )
@@ -165,7 +170,9 @@ class PositionLifecycle:
                     else leg["closed_quantity"] - quantity
                 )
                 prior_avg = Decimal(leg[price_key]) if leg[price_key] is not None else Decimal("0")
-                average = (prior_avg * prior_qty + Decimal(payload["price"]) * quantity) / (prior_qty + quantity)
+                average = (
+                    prior_avg * prior_qty + Decimal(payload["price"]) * quantity
+                ) / (prior_qty + quantity)
                 leg[price_key] = str(average)
                 status = payload["status"]
         for leg in legs.values():
