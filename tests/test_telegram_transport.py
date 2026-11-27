@@ -1,7 +1,7 @@
 import asyncio
+from types import SimpleNamespace
 
 import pytest
-from types import SimpleNamespace
 
 from sensex_engine.domain import TradingMode
 from sensex_engine.mode import ModeController
