@@ -30,6 +30,7 @@ class LegExecutionAction:
     tradingsymbol: str
     side: str
     quantity: int
+    limit_price: Decimal | None = None
 
 
 def build_leg_execution_plan(
