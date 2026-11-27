@@ -48,7 +48,8 @@ class PortfolioQueryService:
         else:
             keys = ("open_max_loss", "weekly_drawdown_pct", "monthly_drawdown_pct", "open_positions", "entries_today")
         labels = {
-            "realized_net_pnl": "Realised net P&L", "fees_and_taxes": "Fees and taxes",\n            "cash_balance": "Cash balance", "unrealized_pnl": "Unrealised P&L",
+            "realized_net_pnl": "Realised net P&L", "fees_and_taxes": "Fees and taxes",
+            "cash_balance": "Cash balance", "unrealized_pnl": "Unrealised P&L",
             "net_liquidation_equity": "Net liquidation equity", "opening_equity": "Opening equity",
             "deposits": "Deposits", "withdrawals": "Withdrawals", "available_margin": "Available margin",
             "open_max_loss": "Open defined max loss", "weekly_drawdown_pct": "Weekly drawdown %",
