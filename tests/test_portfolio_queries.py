@@ -101,6 +101,7 @@ def test_accounting_telegram_views_render_reconciled_values(tmp_path):
     from datetime import UTC, datetime
     from decimal import Decimal
     from sensex_engine.accounting import PortfolioAccountingService
+    from sensex_engine.reconciliation import ReconciliationReport
 
     store = SqliteStore(tmp_path / "accounting-queries-ready.sqlite3")
     accounting = PortfolioAccountingService(store=store)
@@ -114,7 +115,7 @@ def test_accounting_telegram_views_render_reconciled_values(tmp_path):
         broker_net_equity=Decimal("50450"), unrealized_pnl=Decimal("0"),
         available_margin=Decimal("30000"), open_max_loss=Decimal("0"),
         open_positions=0, entries_today=1, reconciliation_id="verified",
-        broker_positions_hash="sha256:flat", marked_at=now,
+        reconciliation_report=ReconciliationReport(True, (), (), (), ()), marked_at=now,
     )
     queries = PortfolioQueryService(
         positions=PositionLifecycle(store), orders=OrderLifecycle(store),
