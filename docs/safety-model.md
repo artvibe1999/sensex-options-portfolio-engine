@@ -95,3 +95,10 @@ Safety clarification: the startup result field is named `recovery_complete`, not
 `ready`. A successful reconciliation is not live readiness and does not authorize
 resuming entries. The full `LiveReadinessService`, risk clearance, Telegram
 allowlisting and separate live confirmation remain independent mandatory gates.
+
+
+## Startup recovery gate
+
+Telegram `/resume` and `/confirm_live` require a successful startup-recovery result in addition to the existing broker-readiness and portfolio-risk checks. The runtime control defaults this gate to incomplete on every process start. A stale in-memory success flag is never restored from configuration or the database.
+
+The current environment-backed Telegram entrypoint does not yet construct or run the Kite startup-recovery dependencies, so it deliberately leaves this gate incomplete. Consequently, `/resume` and live confirmation remain blocked in the default runtime. The startup-recovery service is implemented and tested, but runtime wiring, lifecycle ownership, and supervised recovery are still pending. Do not manually set the gate to bypass recovery.
