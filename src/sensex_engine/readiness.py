@@ -1,8 +1,8 @@
 """Fail-closed readiness evaluation for any future live-mode activation."""
 from __future__ import annotations
 
-from dataclasses import dataclass
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
