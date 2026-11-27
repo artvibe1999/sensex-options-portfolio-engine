@@ -2,7 +2,6 @@
 from dataclasses import dataclass
 from typing import Any
 
-from .broker import BrokerPort
 from .domain import Contract, Position, Side
 
 
@@ -149,7 +148,7 @@ class BrokerReconciliationService:
 
     def reconcile(
         self,
-        broker: BrokerPort,
+        broker: Any,
         *,
         contracts: list[Contract],
         internal_positions: list[Position],
