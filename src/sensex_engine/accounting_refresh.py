@@ -93,7 +93,8 @@ class LiveAccountingRefresh:
         unrealized = Decimal("0")
         seen = set()
         entries = 0
-        active = []
+        family_risk: dict[str, Decimal] = {}
+        count = 0
         for pid in self.account.store.aggregate_ids_for_event("POSITION_CREATED"):
             position = self.positions.snapshot(pid)
             if position is None or position["mode"] != "live":
@@ -135,7 +136,7 @@ class LiveAccountingRefresh:
             if first_open and first_open.astimezone(IST).date() == now.astimezone(IST).date():
                 entries += 1
             if any(qty for qty, _ in basis.values()):
-                active.append(position)
+                position_pnl = Decimal("0")
                 tokens = [
                     legs[index]["instrument_token"]
                     for index, (qty, _) in basis.items() if qty
@@ -150,10 +151,21 @@ class LiveAccountingRefresh:
                         raise ValueError("Open exposure has no valid liquidation quote")
                     long = leg["side"] == "BUY"
                     mark = quote.bid if long else quote.ask
-                    unrealized += (mark - avg) * qty * (1 if long else -1)
+                    position_pnl += (mark - avg) * qty * (1 if long else -1)
+                    if qty != leg["remaining_quantity"]:
+                        raise ValueError("Fill cost basis differs from durable exposure")
+                    leg["open_average_price"] = str(avg)
+                unrealized += position_pnl
+                entry_loss, exposed = filled_position_risk([position], contracts, mode="live")
+                # Never grant risk offsets across positions; reserve the larger loss
+                # measured from entry or from current marked portfolio equity.
+                exposure = max(entry_loss, entry_loss + position_pnl)
+                family = position["strategy_id"]
+                family_risk[family] = family_risk.get(family, Decimal("0")) + exposure
+                count += exposed
         if seen != set(charges):
             raise ValueError("Statement contains charges without matching durable fills")
-        loss, count = filled_position_risk(active, contracts, mode="live")
+        loss = sum(family_risk.values(), Decimal("0"))
         margin = self.broker.margins("equity")
         if margin.get("enabled") is not True:
             raise ValueError("Broker equity segment is disabled")
@@ -190,6 +202,7 @@ class LiveAccountingRefresh:
             open_max_loss=loss, open_positions=count, entries_today=entries,
             reconciliation_id=f"{data['statement_id']}:{now.isoformat()}",
             reconciliation_report=report, marked_at=as_of, actual_cash=cash,
+            strategy_open_risk=family_risk,
         )
         snapshot = self.account.snapshot(now=now)
         if snapshot is None:
