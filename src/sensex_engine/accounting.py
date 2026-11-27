@@ -326,6 +326,8 @@ class PortfolioAccountingService:
         risk_pct = _decimal(strategy_risk_pct, "strategy_risk_pct")
         aggregate_pct = _decimal(aggregate_risk_pct, "aggregate_risk_pct")
         allocation = _decimal(allocation_pct, "allocation_pct")
+        if not isinstance(max_lots, int) or isinstance(max_lots, bool) or max_lots <= 0:
+            return 0
         if not (
             Decimal("0") < risk_pct <= Decimal("1")
             and Decimal("0") < aggregate_pct <= Decimal("1")
