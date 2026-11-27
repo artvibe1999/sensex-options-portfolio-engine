@@ -41,6 +41,8 @@ class LiveReadinessService:
         order_lifecycle: Any | None = None,
         market_data_timestamp_provider: Callable[[], datetime],
         risk_clearance_provider: Callable[[], bool],
+        persistence_health_provider: Callable[[], bool] | None = None,
+        execution_readiness_provider: Callable[[], bool] | None = None,
         reconciliation_service: BrokerReconciliationService | None = None,
         max_contract_age_seconds: int = 86_400,
         max_market_data_age_seconds: int = 5,
@@ -53,6 +55,8 @@ class LiveReadinessService:
         self.contracts_provider = contracts_provider
         self.market_data_timestamp_provider = market_data_timestamp_provider
         self.risk_clearance_provider = risk_clearance_provider
+        self.persistence_health_provider = persistence_health_provider
+        self.execution_readiness_provider = execution_readiness_provider
         self.reconciliation_service = reconciliation_service or BrokerReconciliationService()
         self.max_contract_age_seconds = max_contract_age_seconds
         self.max_market_data_age_seconds = max_market_data_age_seconds
@@ -69,6 +73,27 @@ class LiveReadinessService:
         if current.tzinfo is None or current.utcoffset() is None:
             raise ValueError("Readiness evaluation time must be timezone-aware")
         reasons: list[str] = []
+        try:
+            if not self.broker.is_authenticated():
+                reasons.append("Kite broker authentication is not valid")
+        except Exception as exc:
+            reasons.append(f"Kite authentication check failed: {type(exc).__name__}")
+        if self.persistence_health_provider is None:
+            reasons.append("Durable persistence health provider is not configured")
+        else:
+            try:
+                if self.persistence_health_provider() is not True:
+                    reasons.append("Durable persistence health check is not affirmative")
+            except Exception as exc:
+                reasons.append(f"Durable persistence check failed: {type(exc).__name__}")
+        if self.execution_readiness_provider is None:
+            reasons.append("Live order execution readiness provider is not configured")
+        else:
+            try:
+                if self.execution_readiness_provider() is not True:
+                    reasons.append("Live order execution prerequisites are not satisfied")
+            except Exception as exc:
+                reasons.append(f"Live order execution readiness failed: {type(exc).__name__}")
         contracts: list[Any] = []
         contract_timestamp: datetime | None = None
         try:
@@ -103,7 +128,10 @@ class LiveReadinessService:
         try:
             risk_clear = self.risk_clearance_provider() is True
             if not risk_clear:
-                reasons.append("Portfolio risk clearance is not affirmative")
+                detail = getattr(self.risk_clearance_provider, "last_reason", None)
+                reasons.append(
+                    str(detail) if detail else "Portfolio risk clearance is not affirmative"
+                )
         except Exception as exc:
             risk_clear = False
             reasons.append(f"Portfolio risk check failed: {type(exc).__name__}")
