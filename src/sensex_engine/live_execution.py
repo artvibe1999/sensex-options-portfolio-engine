@@ -106,22 +106,14 @@ class LiveMultiLegExecutionCoordinator:
                 idempotency_key=f"position-create:{position_id}",
             )
             return
-        if (
-            existing["mode"] != "live"
-            or existing["strategy_id"] != position.strategy_id
-            or existing["legs"] != [
-                {
-                    **leg,
-                    "opened_quantity": existing["legs"][i]["opened_quantity"],
-                    "closed_quantity": existing["legs"][i]["closed_quantity"],
-                    "open_average_price": existing["legs"][i]["open_average_price"],
-                    "close_average_price": existing["legs"][i]["close_average_price"],
-                    "remaining_quantity": existing["legs"][i]["remaining_quantity"],
-                }
-                for i, leg in enumerate(legs)
-            ]
-        ):
+        if existing["mode"] != "live" or existing["strategy_id"] != position.strategy_id:
             raise ValueError("Position does not match its immutable durable plan")
+        actual_legs = existing["legs"]
+        if len(actual_legs) != len(legs):
+            raise ValueError("Position leg count differs from its immutable durable plan")
+        for expected, actual in zip(legs, actual_legs, strict=True):
+            if any(actual[key] != expected[key] for key in expected):
+                raise ValueError("Position contract or quantity differs from its immutable durable plan")
 
     def _open(self, position: Position, position_id: str) -> LiveExecutionReport:
         snapshot = self._positions.snapshot(position_id)
@@ -136,9 +128,15 @@ class LiveMultiLegExecutionCoordinator:
         outcomes: list[LiveLegOutcome] = []
         for action in build_leg_execution_plan(position, ExecutionPhase.OPEN):
             order_id = f"{position_id}:OPEN:{action.leg_index}:1"
-            outcome = self._execute_order(
-                position_id, order_id, action, ExecutionPhase.OPEN
-            )
+            try:
+                outcome = self._execute_order(
+                    position_id, order_id, action, ExecutionPhase.OPEN
+                )
+            except Exception as exc:
+                outcome = LiveLegOutcome(
+                    order_id, action, OrderState.UNKNOWN, 0, action.quantity, False,
+                    f"Execution stopped safely: {type(exc).__name__}",
+                )
             outcomes.append(outcome)
             if not outcome.confirmed_filled:
                 cleanup = self._unwind_residual(position, position_id)
@@ -247,6 +245,7 @@ class LiveMultiLegExecutionCoordinator:
         }:
             self._submission.refresh_order(order_id)
         else:
+            self._poll_fills(order_id)
             return self._outcome(order_id, action, self._orders.snapshot(order_id),
                                  "Existing order is terminal; no duplicate submission")
         self._poll_fills(order_id)
@@ -320,11 +319,14 @@ class LiveMultiLegExecutionCoordinator:
                     index, leg.contract.instrument_token, leg.contract.tradingsymbol,
                     side, quantity,
                 )
-                attempt = self._next_close_attempt(position_id, index, side)
-                order_id = f"{position_id}:CLOSE:{index}:{attempt}"
-                outcome = self._execute_order(
-                    position_id, order_id, action, ExecutionPhase.CLOSE
-                )
+                order_id = self._active_or_next_close_order(position_id, index, side)
+                try:
+                    outcome = self._execute_order(
+                        position_id, order_id, action, ExecutionPhase.CLOSE
+                    )
+                except Exception as exc:
+                    self._mark_position_error(position_id, type(exc).__name__)
+                    return outcomes
                 outcomes.append(outcome)
                 if outcome.confirmed_filled:
                     break
@@ -342,8 +344,10 @@ class LiveMultiLegExecutionCoordinator:
                 return outcomes
         return outcomes
 
-    def _next_close_attempt(self, position_id: str, leg_index: int, side: str) -> int:
-        prior = [
+    def _active_or_next_close_order(
+        self, position_id: str, leg_index: int, side: str
+    ) -> str:
+        matches = [
             item for item in self._orders.all_snapshots()
             if item.get("position_id") == position_id
             and int(item.get("leg_index", -1)) == leg_index
@@ -351,7 +355,16 @@ class LiveMultiLegExecutionCoordinator:
             and item.get("mode") == "live"
             and ":CLOSE:" in str(item.get("order_id", ""))
         ]
-        return len(prior) + 1
+        terminal = {
+            OrderState.FILLED.value, OrderState.CANCELLED.value,
+            OrderState.REJECTED.value, OrderState.EXPIRED.value,
+        }
+        active = [item for item in matches if item["state"] not in terminal]
+        if len(active) > 1:
+            raise RuntimeError("Multiple unresolved close orders exist for one position leg")
+        if active:
+            return str(active[0]["order_id"])
+        return f"{position_id}:CLOSE:{leg_index}:{len(matches) + 1}"
 
     def _mark_position_error(self, position_id: str, reason: str) -> None:
         snapshot = self._positions.snapshot(position_id)
