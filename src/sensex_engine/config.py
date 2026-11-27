@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     kite_monitor_retry_max_seconds: int = Field(30, ge=5, le=120)
     # Must be explicitly confirmed after the Kite developer-console static-IP setup.
     kite_static_ip_confirmed: bool = False
+    broker_account_statement_path: str = ""
     max_margin_utilization_pct: float = Field(0.70, gt=0, le=1)
 
     # Environment configuration can never silently boot the process into live mode.
