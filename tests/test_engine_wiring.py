@@ -114,7 +114,8 @@ def _restore_reconciliation_scope():
 
 
 def test_build_headless_and_with_telegram(tmp_path, monkeypatch):
-    import kiteconnect
+    kiteconnect = pytest.importorskip("kiteconnect")  # optional [broker] extra
+    pytest.importorskip("telegram")  # optional [telegram] extra
 
     from sensex_engine import app
 
