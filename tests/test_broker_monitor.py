@@ -203,3 +203,34 @@ def test_watchdog_fails_closed_when_broker_call_stalls():
         assert not monitor.health.healthy
 
     asyncio.run(scenario())
+
+
+def test_monitor_runs_account_refresh_after_recovery_and_fails_closed():
+    async def scenario():
+        recovery = HealthyRecovery()
+        changes = []
+        refresh_calls = []
+
+        def refresh():
+            refresh_calls.append(recovery.calls)
+            return None
+
+        monitor = KiteBrokerMonitor(
+            recovery_factory=lambda: recovery,
+            on_health_change=lambda healthy, reason: changes.append((healthy, reason)),
+            poll_interval_seconds=10,
+            stale_after_seconds=30,
+            after_recovery=refresh,
+        )
+        await monitor.start()
+        for _ in range(100):
+            if changes:
+                break
+            await asyncio.sleep(0.01)
+        assert refresh_calls == [1]
+        assert changes and changes[0][0] is False
+        assert "Account refresh unavailable" in changes[0][1]
+        assert not monitor.health.healthy
+        await monitor.stop()
+
+    asyncio.run(scenario())
