@@ -298,20 +298,27 @@ class SqliteStore:
                     allowed = {
                         "PENDING": {"CLOSING", "ERROR"},
                         "OPEN": {"CLOSING", "ERROR"},
-                        "CLOSING": {"ERROR", "CLOSED"},
+                        "CLOSING": {"ERROR"},
                         "ERROR": {"CLOSING"},
                         "CLOSED": set(),
                     }
-                    if target not in allowed.get(status, set()):
+                    explicit_flat_finalization = (
+                        target == "CLOSED" and payload.get("flat_finalization") is True
+                    )
+                    if target not in allowed.get(status, set()) and not explicit_flat_finalization:
                         raise ValueError(
                             f"Invalid position transition: {status} -> {target}"
                         )
-                    if target == "CLOSED" and any(
-                        open_fills.get(index, 0) != close_fills.get(index, 0)
-                        for index in legs
+                    if target == "CLOSED" and (
+                        not explicit_flat_finalization
+                        or any(
+                            open_fills.get(index, 0) != close_fills.get(index, 0)
+                            for index in legs
+                        )
                     ):
                         raise ValueError(
-                            "A position can be marked CLOSED only when every leg is flat"
+                            "A position can be marked CLOSED only by flat finalization "
+                            "when every leg has zero exposure"
                         )
                 elif event_type == "POSITION_LEG_FILL_RECORDED":
                     if (
