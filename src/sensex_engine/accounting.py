@@ -83,7 +83,9 @@ class PortfolioAccountingService:
     ) -> bool:
         amount = _decimal(amount, "cash_flow")
         if amount <= 0 or direction not in {"DEPOSIT", "WITHDRAWAL"}:
-            raise ValueError("Cash flow requires a positive amount and DEPOSIT/WITHDRAWAL direction")
+            raise ValueError(
+                "Cash flow requires a positive amount and DEPOSIT/WITHDRAWAL direction"
+            )
         if not any(e["event_type"] == "ACCOUNT_OPENED" for e in self._events()):
             raise RuntimeError("Set the explicit opening equity before recording cash flows")
         timestamp = occurred_at or datetime.now(UTC)
@@ -141,7 +143,11 @@ class PortfolioAccountingService:
         positions_hash = hashlib.sha256(
             repr(reconciliation_report.broker_quantities).encode("utf-8")
         ).hexdigest()
-        if values["broker_net_equity"] <= 0 or values["available_margin"] < 0 or values["open_max_loss"] < 0:
+        if (
+            values["broker_net_equity"] <= 0
+            or values["available_margin"] < 0
+            or values["open_max_loss"] < 0
+        ):
             raise ValueError("Broker equity must be positive and risk/margin values non-negative")
         if (
             not isinstance(open_positions, int) or isinstance(open_positions, bool)
@@ -213,7 +219,10 @@ class PortfolioAccountingService:
         )
         return report
 
-    def snapshot(self, *, now: datetime | None = None, max_mark_age: timedelta = timedelta(minutes=2)) -> PortfolioSnapshot | None:
+    def snapshot(
+        self, *, now: datetime | None = None,
+        max_mark_age: timedelta = timedelta(minutes=2),
+    ) -> PortfolioSnapshot | None:
         events = self._events()
         opened = [e for e in events if e["event_type"] == "ACCOUNT_OPENED"]
         marks = [e for e in events if e["event_type"] == "ACCOUNT_RECONCILED_MARK"]
@@ -254,8 +263,10 @@ class PortfolioAccountingService:
                 event_date = datetime.fromisoformat(payload["occurred_at"]).astimezone(UTC).date()
                 if event_date == today:
                     daily_realized += pnl - charge
-        equity = opening + deposits - withdrawals + realized - fees + _decimal(mark["unrealized_pnl"], "unrealized_pnl")
-        # The broker's net liquidation equity is an independent cross-check, never silently substituted.
+        unrealized = _decimal(mark["unrealized_pnl"], "unrealized_pnl")
+        equity = opening + deposits - withdrawals + realized - fees + unrealized
+        # Broker net liquidation equity is an independent cross-check;
+        # it is never silently substituted.
         broker_equity = _decimal(mark["broker_net_equity"], "broker_net_equity")
         if abs(equity - broker_equity) > Decimal("1.00"):
             return None
@@ -363,12 +374,32 @@ class PortfolioAccountingService:
             return None
         events = self._events()
         opened = next(e for e in events if e["event_type"] == "ACCOUNT_OPENED")
-        deposits = sum((_decimal(e["payload"]["amount"], "amount") for e in events
-                        if e["event_type"] == "ACCOUNT_CASH_FLOW" and e["payload"]["direction"] == "DEPOSIT"), Decimal("0"))
-        withdrawals = sum((_decimal(e["payload"]["amount"], "amount") for e in events
-                           if e["event_type"] == "ACCOUNT_CASH_FLOW" and e["payload"]["direction"] == "WITHDRAWAL"), Decimal("0"))
-        pnl = sum((_decimal(e["payload"]["realized_pnl"], "realized_pnl") - _decimal(e["payload"]["fees"], "fees")
-                   for e in events if e["event_type"] == "ACCOUNT_TRADE_RESULT"), Decimal("0"))
+        deposits = sum(
+            (
+                _decimal(e["payload"]["amount"], "amount")
+                for e in events
+                if e["event_type"] == "ACCOUNT_CASH_FLOW"
+                and e["payload"]["direction"] == "DEPOSIT"
+            ),
+            Decimal("0"),
+        )
+        withdrawals = sum(
+            (
+                _decimal(e["payload"]["amount"], "amount")
+                for e in events
+                if e["event_type"] == "ACCOUNT_CASH_FLOW"
+                and e["payload"]["direction"] == "WITHDRAWAL"
+            ),
+            Decimal("0"),
+        )
+        pnl = sum(
+            (
+                _decimal(e["payload"]["realized_pnl"], "realized_pnl")
+                - _decimal(e["payload"]["fees"], "fees")
+                for e in events if e["event_type"] == "ACCOUNT_TRADE_RESULT"
+            ),
+            Decimal("0"),
+        )
         fees = sum((
             _decimal(e["payload"]["fees"], "fees")
             for e in events if e["event_type"] == "ACCOUNT_TRADE_RESULT"
