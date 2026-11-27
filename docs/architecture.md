@@ -75,3 +75,18 @@ snapshot and scales quantities in whole lots. Range, transition, volatility
 expansion and unknown regimes currently generate no candidate. Candidate
 generation is advisory only; it does not submit orders and must still pass
 independent risk, margin, execution-liquidity and broker-reconciliation gates.
+
+
+## Read-only broker reconciliation
+
+The reconciliation service compares every non-closed internal position leg,
+netted by exchange instrument token, with the broker's net position snapshot.
+It also checks the current contract-master symbol mapping and identifies active
+or pending broker orders. Fractional/invalid quantities, malformed broker
+responses, unknown non-zero positions, quantity mismatches, pending orders,
+unauthenticated sessions, and adapter exceptions all fail closed.
+
+This is a read-only safety service. It does not cancel orders, modify positions,
+or execute closes. Until order intents and fills are durably tracked and a
+broker-backed execution state machine is implemented, pending orders keep the
+portfolio unreconciled and new entries must remain disabled.
