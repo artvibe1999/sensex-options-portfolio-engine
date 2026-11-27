@@ -93,7 +93,7 @@ class BrokerFillIngestionService:
             )
             raise
 
-    def recover_pending(self, *, limit: int = 100) -> list[FillIngestionResult]:
+    def recover_pending(self, *, limit: int = 1000) -> list[FillIngestionResult]:
         """Replay unprocessed durable receipts after restart or transient failure."""
         store = self._coordinator.orders.store
         recovered: list[FillIngestionResult] = []
@@ -118,6 +118,10 @@ class BrokerFillIngestionService:
                 self._process_claimed(event, event_key, int(claim["attempts"]))
             )
         return recovered
+
+    def has_pending_receipts(self) -> bool:
+        """Return whether any receipt remains unprocessed after a recovery pass."""
+        return bool(self._coordinator.orders.store.pending_broker_fills(limit=1))
 
     def _apply(self, event: BrokerFillEvent) -> FillIngestionResult:
         matches = [
