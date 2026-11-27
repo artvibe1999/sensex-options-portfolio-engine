@@ -12,9 +12,6 @@ from typing import Any
 from .domain import PortfolioSnapshot
 
 ACCOUNT_ID = "account:default"
-MONEY_FIELDS = ("amount", "realized_pnl", "unrealized_pnl", "fees", "available_margin", "open_max_loss")
-
-
 def _decimal(value: Any, field: str) -> Decimal:
     if isinstance(value, bool):
         raise ValueError(f"{field} must be a finite decimal amount")
@@ -128,7 +125,12 @@ class PortfolioAccountingService:
             raise ValueError("Broker reconciliation identity and positions hash are required")
         if values["broker_net_equity"] <= 0 or values["available_margin"] < 0 or values["open_max_loss"] < 0:
             raise ValueError("Broker equity must be positive and risk/margin values non-negative")
-        if isinstance(open_positions, bool) or open_positions < 0 or isinstance(entries_today, bool) or entries_today < 0:
+        if (
+            not isinstance(open_positions, int) or isinstance(open_positions, bool)
+            or open_positions < 0
+            or not isinstance(entries_today, int) or isinstance(entries_today, bool)
+            or entries_today < 0
+        ):
             raise ValueError("Position and entry counts must be non-negative integers")
         timestamp = marked_at or datetime.now(UTC)
         if timestamp.tzinfo is None:
