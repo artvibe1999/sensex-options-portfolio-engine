@@ -27,7 +27,7 @@ def make_position():
     short = Contract("SENSEX_SHORT", 102, expiry, Decimal("80200"), Right.CE, 10, Decimal("0.05"))
     return Position.create(
         "BULL_CALL_DEBIT",
-        (OptionLeg(short, Side.SELL, 1), OptionLeg(long, Side.BUY, 1)),
+        (OptionLeg(short, Side.SELL, 2), OptionLeg(long, Side.BUY, 2)),
         TradingMode.LIVE,
     )
 
@@ -142,8 +142,8 @@ def test_live_open_submits_protective_long_then_short_only_after_fills(tmp_path)
     coordinator, orders, positions, broker, history = build_coordinator(
         tmp_path,
         [
-            {"fills": [(10, "100.00")]},
-            {"fills": [(10, "101.00")]},
+            {"fills": [(20, "100.00")]},
+            {"fills": [(20, "101.00")]},
         ],
     )
     position = make_position()
@@ -161,10 +161,10 @@ def test_partial_second_leg_is_cancelled_then_residual_is_flattened_short_first(
     coordinator, orders, positions, broker, history = build_coordinator(
         tmp_path,
         [
-            {"fills": [(10, "100.00")]},
-            {"fills": [(5, "101.00")]},
-            {"fills": [(5, "99.00")]},
-            {"fills": [(10, "98.00")]},
+            {"fills": [(20, "100.00")]},
+            {"fills": [(10, "101.00")]},
+            {"fills": [(10, "99.00")]},
+            {"fills": [(20, "98.00")]},
         ],
     )
     position = make_position()
@@ -204,7 +204,7 @@ def test_uncertain_submit_is_never_retried_and_blocks_later_legs(tmp_path):
 
 def test_live_execution_is_disabled_by_default(tmp_path):
     coordinator, _, _, broker, _ = build_coordinator(
-        tmp_path, [{"fills": [(10, "100.00")]}]
+        tmp_path, [{"fills": [(20, "100.00")]}]
     )
     coordinator._enabled = False
     with pytest.raises(PermissionError, match="disabled"):
@@ -216,11 +216,11 @@ def test_close_partial_fill_is_cancelled_and_replaced_only_after_confirmation(tm
     coordinator, orders, positions, broker, _ = build_coordinator(
         tmp_path,
         [
-            {"fills": [(10, "100.00")]},
-            {"fills": [(10, "101.00")]},
-            {"fills": [(5, "99.00")]},
-            {"fills": [(5, "98.00")]},
-            {"fills": [(10, "97.00")]},
+            {"fills": [(20, "100.00")]},
+            {"fills": [(20, "101.00")]},
+            {"fills": [(10, "99.00")]},
+            {"fills": [(20, "98.00")]},
+            {"fills": [(20, "97.00")]},
         ],
     )
     position = make_position()
