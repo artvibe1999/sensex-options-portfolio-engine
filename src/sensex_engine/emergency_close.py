@@ -265,8 +265,13 @@ class EmergencyCloseAllService:
             reasons.append(f"Current-session trade backfill failed: {type(exc).__name__}")
 
         if unresolved:
+            residuals, reconciliation_issues = self._reconcile_exposure(
+                contracts, require_no_open_orders=False
+            )
+            reasons.extend(reconciliation_issues)
             return self._report(
-                run_id, cancelled, closed, unresolved, (), reasons, completed=False
+                run_id, cancelled, closed, unresolved, residuals,
+                reasons, completed=False,
             )
 
         # Reconcile signed net quantities before issuing any close order. This
