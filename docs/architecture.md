@@ -197,3 +197,37 @@ Safety clarification: the startup result field is named `recovery_complete`, not
 `ready`. A successful reconciliation is not live readiness and does not authorize
 resuming entries. The full `LiveReadinessService`, risk clearance, Telegram
 allowlisting and separate live confirmation remain independent mandatory gates.
+
+## Supervised Kite fill monitoring and reconciliation
+
+The Telegram runtime starts a supervised KiteBrokerMonitor after startup recovery
+when both Kite credentials are configured. It runs the existing ordered recovery
+service on a configurable interval: replay durable pending fill receipts, discover
+and ingest all current-IST-session individual Kite trades for correlated LIVE
+intents, refresh the BFO SENSEX contract master, and reconcile durable positions
+and orders against Kite's read-only broker snapshots. The same pipeline is repeated
+after every reconnect, so missed postbacks are recovered from individual trade
+history rather than assumed delivered.
+
+The monitor executes synchronous Kite calls in a worker thread to keep Telegram's
+async event loop responsive. An independent watchdog detects stale successful-cycle
+timestamps and poller-worker exit. On authentication, transport, malformed-data,
+fill-ingestion, pending-receipt, contract-master, reconciliation, stale-state or
+worker failure, the runtime immediately pauses entries, forces PAPER mode, and
+closes the startup-recovery gate. Retries use bounded exponential backoff and
+construct a fresh Kite adapter/service after failure. Health transitions are
+logged and sent to configured allowlisted Telegram chats; alert-delivery failure
+is logged but cannot disable the fail-closed control.
+
+A later successful cycle reopens only the startup-recovery gate. It never clears
+the pause or restores LIVE mode; an operator must separately use the existing
+Telegram control flow, and all other readiness gates still apply. Shutdown stops
+the monitor and leaves the runtime fail-closed. Missing Kite credentials mean
+that no monitor is started and startup recovery remains incomplete.
+
+Defaults are a 30-second poll interval, 120-second stale threshold, and 30-second
+maximum retry backoff. Settings validation requires a poll interval of at least
+10 seconds, a stale threshold at least twice the poll interval, and a bounded
+retry maximum. This is read-only monitoring: it does not submit, modify, cancel,
+or automatically retry broker orders. Broker order execution remains a separate
+unfinished requirement.
