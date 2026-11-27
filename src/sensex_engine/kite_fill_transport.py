@@ -5,9 +5,10 @@ source. This module never places, modifies, or cancels broker orders.
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
-from typing import Any, Iterable
+from typing import Any
 from zoneinfo import ZoneInfo
 
 from .broker_fill_ingestion import (
