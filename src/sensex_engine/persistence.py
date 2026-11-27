@@ -34,6 +34,16 @@ class SqliteStore:
         finally:
             connection.close()
 
+    def health_check(self) -> bool:
+        """Verify the durable SQLite store is reachable and structurally healthy."""
+        with self._connection() as connection:
+            result = connection.execute("PRAGMA quick_check").fetchone()
+            if result is None or str(result[0]).lower() != "ok":
+                raise sqlite3.DatabaseError("SQLite quick_check did not return ok")
+            connection.execute("SELECT 1 FROM command_audit LIMIT 1").fetchone()
+            connection.execute("SELECT 1 FROM portfolio_events LIMIT 1").fetchone()
+        return True
+
     def _initialize(self) -> None:
         with self._connection() as connection:
             connection.execute("PRAGMA journal_mode = WAL")
