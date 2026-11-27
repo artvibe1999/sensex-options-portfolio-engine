@@ -43,7 +43,9 @@ class Settings(BaseSettings):
     def monitor_stale_window_must_cover_two_polls(cls, value: int, info: Any) -> int:
         interval = info.data.get("kite_monitor_poll_interval_seconds", 30)
         if value < interval * 2:
-            raise ValueError("kite_monitor_max_stale_seconds must be at least twice the poll interval")
+            raise ValueError(
+                "kite_monitor_max_stale_seconds must be at least twice the poll interval"
+            )
         return value
 
     def startup_mode(self) -> Literal["paper"]:
