@@ -58,6 +58,9 @@ _ALLOWED: dict[OrderState, set[OrderState]] = {
         OrderState.PARTIALLY_FILLED, OrderState.FILLED, OrderState.CANCELLED,
         OrderState.UNKNOWN, OrderState.RECOVERY_REQUIRED,
     },
+    # A cancel acknowledgement ends the unfilled remainder, but broker fill events
+    # can race with that acknowledgement and arrive afterward.
+    OrderState.CANCELLED: {OrderState.PARTIALLY_FILLED, OrderState.FILLED},
     OrderState.UNKNOWN: {
         OrderState.ACKNOWLEDGED, OrderState.OPEN, OrderState.PARTIALLY_FILLED,
         OrderState.FILLED, OrderState.CANCELLED, OrderState.REJECTED,
@@ -219,7 +222,14 @@ class OrderLifecycle:
                     raise ValueError("Fill idempotency key conflicts with existing fill")
                 return False
             state = OrderState(current["state"])
-            if state in _TERMINAL:
+            # A cancel acknowledgement is terminal for the remaining quantity, not
+            # proof that no earlier execution can still be reported by the broker.
+            # Accept a late fill only while cumulative quantity remains below the
+            # original request; the existing database guard still prevents overfills.
+            if state in _TERMINAL and not (
+                state is OrderState.CANCELLED
+                and int(current["filled_quantity"]) < int(current["quantity"])
+            ):
                 raise ValueError("Cannot add a fill to a terminal order")
             total = int(current["filled_quantity"]) + quantity
             requested = int(current["quantity"])
