@@ -14,11 +14,19 @@ The application is split into domain, market-data/broker ports, strategy eligibi
 8. Build a protective leg execution plan: submit long protective legs before opening short legs; when closing, buy back original short legs before selling long protective legs. Persist intent before any broker submission and reconcile every leg/fill.
 9. Monitor positions and report state through Telegram.
 
-The current execution planner only calculates a deterministic leg order and contract
-quantities from the exchange lot size. It is not an execution coordinator: it does
-not submit an order, wait for a fill, gate the next leg, cancel siblings, or recover
-from rejects/timeouts. The live broker adapter remains intentionally absent, so
-this plan must not be treated as proof that a multi-leg position is protected.
+The deterministic planner calculates leg order and quantities from exchange lot
+sizes. A paper-only sequential coordinator now exercises the fill-gating invariant:
+opening stops before any short leg unless the preceding protective long is confirmed
+fully filled; closing stops before selling a long unless the preceding short cover is
+confirmed fully filled. Accepted-but-unfilled, partial, rejected, malformed, and
+uncertain submission results halt the sequence and require reconciliation.
+
+This coordinator refuses LIVE positions and has no Kite implementation. Its stable
+client-order key is passed to the injected paper submitter, but the coordinator does
+not itself durably persist submissions, recover an ambiguous timeout, cancel an
+outstanding order, or manage residual exposure. It is a tested paper orchestration
+primitive, not a broker execution service or proof of live multi-leg protection.
+
 
 ## Capital accounting
 
