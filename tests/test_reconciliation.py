@@ -171,7 +171,7 @@ def test_reconcile_store_uses_actual_filled_quantities(tmp_path):
     lifecycle = PositionLifecycle(SqliteStore(tmp_path / "positions.sqlite3"))
     orders = OrderLifecycle(lifecycle.store)
     lifecycle.create(
-        position_id="durable-1", strategy_id="BULL_CALL", mode="paper",
+        position_id="durable-1", strategy_id="BULL_CALL", mode="live",
         idempotency_key="create-durable",
         legs=[
             {"leg_index": 0, "instrument_token": 1, "tradingsymbol": "SENSEX80000CE",
@@ -221,7 +221,7 @@ def test_reconcile_store_fails_closed_for_partial_position(tmp_path):
     lifecycle = PositionLifecycle(SqliteStore(tmp_path / "partial.sqlite3"))
     orders = OrderLifecycle(lifecycle.store)
     lifecycle.create(
-        position_id="partial-1", strategy_id="BULL_CALL", mode="paper",
+        position_id="partial-1", strategy_id="BULL_CALL", mode="live",
         idempotency_key="create-partial",
         legs=[
             {"leg_index": 0, "instrument_token": 1, "tradingsymbol": "SENSEX80000CE",
@@ -319,3 +319,37 @@ def test_reconcile_store_does_not_block_on_paper_order_intents(tmp_path):
         position_lifecycle=positions, order_lifecycle=orders,
     )
     assert report.reconciled
+
+
+def test_paper_exposure_is_not_reconciled_as_live_broker_exposure(tmp_path):
+    from sensex_engine.persistence import SqliteStore
+    from sensex_engine.position_lifecycle import PositionLifecycle
+
+    lifecycle = PositionLifecycle(SqliteStore(tmp_path / "paper.sqlite3"))
+    lifecycle.create(
+        position_id="paper", strategy_id="BULL_CALL", mode="paper",
+        idempotency_key="paper",
+        legs=[dict(leg_index=0, instrument_token=1, tradingsymbol="SENSEX80000CE",
+                   side="BUY", quantity=20)],
+    )
+    lifecycle.record_leg_fill(
+        position_id="paper", leg_index=0, phase="OPEN", fill_id="simulated",
+        quantity=20, price=Decimal("100"), filled_at="2026-11-27T10:00:00+05:30",
+    )
+
+    class Broker:
+        def is_authenticated(self):
+            return True
+
+        def positions(self):
+            return {"net": []}
+
+        def orders(self):
+            return []
+
+    report = BrokerReconciliationService().reconcile_store(
+        Broker(), contracts=[_contract(1, "SENSEX80000CE", "80000")],
+        position_lifecycle=lifecycle, order_lifecycle=OrderLifecycle(lifecycle.store),
+    )
+    assert report.reconciled
+    assert report.expected_quantities == ()
