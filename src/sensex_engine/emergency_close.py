@@ -126,10 +126,20 @@ class EmergencyCloseAllService:
             )
             return report
         except Exception as exc:
-            return EmergencyCloseReport(
+            failure = EmergencyCloseReport(
                 run_id, False, True, (), (), (), (),
                 (f"Emergency workflow stopped safely: {type(exc).__name__}",),
             )
+            try:
+                self._store.append_event(
+                    idempotency_key=f"emergency-close:{run_id}:failed",
+                    event_type="EMERGENCY_CLOSE_ALL_FAILED",
+                    aggregate_id=run_id,
+                    payload={"run_id": run_id, "reason": failure.reasons[0]},
+                )
+            except Exception:
+                pass
+            return failure
         finally:
             self._operations.paused = True
             self._operations.mode.force_paper()
@@ -307,6 +317,25 @@ class EmergencyCloseAllService:
         except Exception as exc:
             unresolved.append("FINAL_FILL_BACKFILL")
             reasons.append(f"Final trade-history backfill failed: {type(exc).__name__}")
+
+        for snapshot in self._positions.active_snapshots():
+            if str(snapshot.get("mode", "")).lower() != "live":
+                continue
+            position_id = str(snapshot["position_id"])
+            if all(int(leg["remaining_quantity"]) == 0 for leg in snapshot["legs"]):
+                try:
+                    self._positions.finalize_flat(
+                        position_id=position_id,
+                        update_id=f"emergency-final-flat:{run_id}",
+                    )
+                except Exception as exc:
+                    reasons.append(
+                        f"Flat position {position_id} could not be finalized: {type(exc).__name__}"
+                    )
+                    unresolved.append(f"POSITION:{position_id}")
+            else:
+                reasons.append(f"Position {position_id} retains durable open exposure")
+                unresolved.append(f"POSITION:{position_id}")
 
         for order in self._orders.active_snapshots():
             if str(order.get("mode", "")).lower() == "live":
