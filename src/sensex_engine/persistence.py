@@ -123,6 +123,34 @@ class SqliteStore:
                 "SELECT event_type, payload_json FROM portfolio_events "
                 "WHERE aggregate_id = ? ORDER BY event_id", (aggregate_id,)
             ).fetchall()
+            if event_type == "ORDER_STATE_CHANGED" and payload.get("broker_order_id"):
+                incoming_broker_id = str(payload["broker_order_id"]).strip()
+                if not incoming_broker_id:
+                    raise ValueError("Broker order ID must not be blank")
+                for event in connection.execute(
+                    "SELECT aggregate_id, payload_json FROM portfolio_events "
+                    "WHERE event_type = 'ORDER_STATE_CHANGED'"
+                ).fetchall():
+                    prior_payload = json.loads(event["payload_json"])
+                    prior_broker_id = prior_payload.get("broker_order_id")
+                    if not prior_broker_id:
+                        continue
+                    if str(prior_broker_id) == incoming_broker_id:
+                        if event["aggregate_id"] != aggregate_id:
+                            raise ValueError("Broker order ID is already assigned to another internal order")
+                        if str(prior_broker_id) != incoming_broker_id:
+                            raise ValueError("Internal order broker ID cannot be changed")
+                existing_ids = {
+                    str(json.loads(event["payload_json"])["broker_order_id"])
+                    for event in connection.execute(
+                        "SELECT payload_json FROM portfolio_events "
+                        "WHERE aggregate_id = ? AND event_type = 'ORDER_STATE_CHANGED'",
+                        (aggregate_id,),
+                    ).fetchall()
+                    if json.loads(event["payload_json"]).get("broker_order_id")
+                }
+                if existing_ids and existing_ids != {incoming_broker_id}:
+                    raise ValueError("Internal order broker ID cannot be changed")
             if event_type == "ORDER_INTENT_CREATED":
                 if rows:
                     raise ValueError("Order intent already exists")
