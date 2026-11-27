@@ -265,10 +265,11 @@ clients sharing the same Kite API key. Kite's documented API limits remain the
 ultimate external constraint. Durable intent price is persisted and compared
 before the submission service crosses the broker boundary.
 
-The adapter is deliberately not constructed by the Telegram runtime. The durable
-submission service's explicit live-enable flag remains false by default. Connecting
-the adapter to fill-confirmed multi-leg orchestration and full live readiness is
-PE-03/PE-04, not part of this adapter milestone.
+PE-04 constructs the adapter from the same authenticated Kite client as the
+read-only broker and stores it in Telegram application state. Construction does
+not submit an order. The durable submission service's explicit live-enable flag
+remains false by default, and the multi-leg coordinator is not invoked by Telegram.
+
 
 
 ## Durable live multi-leg execution (PE-03)
@@ -322,3 +323,48 @@ milestone. No Telegram command or runtime path invokes this coordinator until
 PE-04 injects all live readiness, risk, market-data, authentication and persistence
 dependencies. Paper remains the process-start default and no real order was placed
 during implementation.
+
+
+## Full runtime live-readiness wiring (PE-04)
+
+The Telegram application now constructs and retains the runtime safety dependency
+graph when Kite credentials are configured: one authenticated `KiteReadOnlyAdapter`,
+the separate `KiteOrderExecutionAdapter`, shared durable SQLite order/position
+lifecycles, the portfolio query service, and `LiveReadinessService`. The runtime
+injects that service as the provider for both `/resume` and `/confirm_live`.
+Missing credentials, a missing optional Kite SDK, or any construction failure
+installs a deny-all readiness provider and leaves the process in PAPER mode with
+entries paused. No broker credentials are logged.
+
+Every live-readiness evaluation independently checks:
+- Kite profile authentication.
+- A freshly downloaded BFO SENSEX CE/PE contract master with unique tokens/symbols,
+  positive lot/tick metadata and a current IST expiry.
+- A same-expiry, same-strike CE/PE quote pair. Both quotes must be no older than
+  two seconds, have valid bid/ask, no crossed market, spread at most 3%, positive
+  top-of-book depth and volume, and timestamp skew at most two seconds.
+- SQLite `PRAGMA quick_check` plus successful access to the command audit and
+  portfolio event tables.
+- Read-only broker positions/orders reconciliation against durable position and
+  order projections, including all unresolved order states.
+- Current Kite equity-segment funds and margin utilisation plus the adaptive
+  portfolio risk gate.
+- Explicit operator confirmation that the Kite order-placement static IP has
+  been configured. `KITE_STATIC_IP_CONFIRMED` defaults false; it must only be
+  set true after the account's registered static IP is configured in the Kite
+  developer console. Kite rejects order requests from unregistered IPs.
+
+The risk gate reads the live Kite funds/margins endpoint and checks positive
+available funds, account margin utilisation, net liquidation equity, available
+margin, daily loss, weekly/monthly drawdown, open-position and daily-entry limits,
+peak-equity drawdown scaling, and aggregate open risk. It requires an authoritative
+`PortfolioSnapshot` provider. The current runtime intentionally does not fabricate
+that snapshot: until PE-06 completes authoritative equity, cash-flow, P&L and
+drawdown accounting, the default risk provider returns false and live activation
+is impossible. This is a deliberate dependency boundary, not a readiness bypass.
+
+A successful startup recovery is still not enough. Both `/resume` and the separate
+`/confirm_live` command re-evaluate the complete dependency graph. A failure
+denies the command. Monitor failures continue to force PAPER mode and pause entries.
+The order adapter is constructed for dependency readiness only; neither the
+submission service nor the PE-03 coordinator is activated by this milestone.
