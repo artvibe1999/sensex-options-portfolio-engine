@@ -12,13 +12,26 @@ from sensex_engine.broker_submission import (
     BrokerOrderStatus,
     DurableBrokerSubmissionService,
 )
-from sensex_engine.domain import Contract, OptionLeg, Position, Right, Side, TradingMode
+from sensex_engine.domain import (
+    Contract,
+    OptionLeg,
+    PortfolioSnapshot,
+    Position,
+    Regime,
+    Right,
+    Side,
+    StrategyCandidate,
+    TradingMode,
+)
+from sensex_engine.entry_sizing import EntrySizingService
 from sensex_engine.execution import ExecutionPhase
 from sensex_engine.fill_coordinator import FillCoordinator
 from sensex_engine.live_execution import LiveMultiLegExecutionCoordinator
+from sensex_engine.market_data import Quote
 from sensex_engine.order_lifecycle import OrderLifecycle, OrderState
 from sensex_engine.persistence import SqliteStore
 from sensex_engine.position_lifecycle import PositionLifecycle
+from sensex_engine.risk import RiskEngine
 
 
 def make_position():
@@ -293,3 +306,58 @@ def test_close_is_blocked_while_opening_order_cancel_is_unconfirmed(tmp_path):
     assert len(broker.submit_calls) == before_close
     assert not any(":CLOSE:" in item["order_id"] for item in orders.all_snapshots())
     assert positions.snapshot(str(position.position_id))["status"] == "ERROR"
+
+
+def test_sized_live_entry_uses_approved_quantity_and_limit_prices(tmp_path):
+    coordinator, orders, positions, broker, _ = build_coordinator(
+        tmp_path, [
+            {"fills": [(20, "120")]},
+            {"fills": [(20, "100")]},
+        ],
+    )
+    original = make_position()
+    now = datetime.now(UTC)
+    legs = tuple(OptionLeg(leg.contract, leg.side, 1) for leg in original.legs)
+    candidate = StrategyCandidate(
+        original.strategy_id, Regime.BULL_TREND, legs, Decimal("200"),
+        Decimal("1800"), Decimal("200"), Decimal("10"), now, True,
+    )
+
+    class Market:
+        def instruments(self):
+            return [leg.contract for leg in legs]
+
+        def quotes(self, tokens):
+            return {
+                101: Quote(101, now, Decimal("120"), Decimal("119"),
+                           Decimal("120"), 100, 100, 1000),
+                102: Quote(102, now, Decimal("100"), Decimal("100"),
+                           Decimal("101"), 100, 100, 1000),
+            }
+
+        def basket_margin(self, legs, prices):
+            return Decimal("2000") * legs[0].lots
+
+    snapshot = PortfolioSnapshot(
+        Decimal("100000"), Decimal("30000"), Decimal("0"),
+        Decimal("0"), Decimal("0"), peak_equity=Decimal("100000"),
+    )
+    coordinator._entry_sizing = EntrySizingService(
+        broker=Market(), snapshot_provider=lambda: snapshot, risk=RiskEngine(),
+    )
+    coordinator._require_entry_approval = True
+    coordinator._entry_allowed = lambda: False
+    with pytest.raises(PermissionError, match="sized entry approval"):
+        coordinator.execute(original, ExecutionPhase.OPEN)
+    with pytest.raises(PermissionError, match="gates"):
+        coordinator.execute_sized(candidate, max_lots=2, allocation_pct=Decimal(".5"))
+    assert broker.submit_calls == []
+
+    coordinator._entry_allowed = lambda: True
+    result = coordinator.execute_sized(candidate, max_lots=2, allocation_pct=Decimal(".5"))
+    assert result.completed
+    assert [(a.side, a.quantity, a.limit_price) for a, _ in broker.submit_calls] == [
+        ("BUY", 20, Decimal("120")), ("SELL", 20, Decimal("100")),
+    ]
+    assert positions.snapshot(result.position_id)["is_fully_open"]
+    assert all(order["state"] == "FILLED" for order in orders.all_snapshots())
