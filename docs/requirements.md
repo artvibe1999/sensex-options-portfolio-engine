@@ -898,19 +898,21 @@ acceptance conditions are implemented, tested, and verified on the branch. A
 foundation, stub, plan, injectable interface, or paper-only simulation does not
 complete a live requirement. The count below counts IDs, not sub-bullets.
 
-**Register update: PE-01, PE-02 and PE-03 are COMPLETE. PE-03 was verified on
-exact implementation head 272f949adeda4cd06b21b293a0aa153bfce4ec02 (Ruff passed;
-pytest 206 passed; 85% statement coverage; push CI and PR CI passed). The canonical
-register now has 14 pending or partial items.** All are in scope because they map
+**Register update: PE-01 through PE-04 are COMPLETE. PE-04 adds runtime-backed
+Kite authentication, contract/quote freshness, durable-store health, broker
+reconciliation, funds/margin checks, portfolio-risk gates and Telegram injection.
+PE-06 remains a required dependency for authoritative equity/drawdown snapshots,
+so live activation remains blocked until that work is complete. The canonical
+register now has 13 pending or partial items.** All are in scope because they map
 directly to requirements in sections 5–16. No additional feature may be added
 unless it is explicitly required by this document.
 
 | ID | Status | Requirement and completion condition |
 |---|---|---|
 | PE-01 | COMPLETE | **Supervised broker fill acquisition and reconciliation.** Recurring current-session Kite trade-history polling, supervised Telegram lifecycle, adapter recreation/retry, missed-event backfill through the durable inbox, periodic broker reconciliation, watchdog stale/worker-death detection, allowlisted Telegram alerts and fail-closed paper/pause behaviour are implemented and covered by CI at commit f3d973462e3a15ef741c7f24ec2de7355827f0ab. |
-| PE-02 | COMPLETE | **Kite order-placement adapter.** Added a BFO SENSEX-only LIMIT adapter with refreshed-contract/token/symbol checks, whole-lot and tick-aligned price validation, NRML/DAY/regular order policy, deterministic 20-character alphanumeric tag derived from the durable client key, exact same-day order-book lookup bound to persisted order identity, guarded LIMIT modify/cancel, response/status validation, and a conservative per-process request throttle. Kite tags are correlation hints, not broker-side idempotency guarantees; the durable submission boundary never retries uncertain submissions, and missing/ambiguous lookup results remain blocked. Runtime wiring and full live-readiness belong to PE-04. Live submission remains disabled by default. |
-| PE-03 | COMPLETE | **Durable live multi-leg execution and recovery.** Implemented in `live_execution.py`: immutable durable LIMIT intents, fill-ledger gating, one-shot broker submission/recovery, confirmed cancel-before-replace, partial/reject/timeout handling, cancel/fill race recovery, short-first residual cleanup, unresolved-opening-order close protection and explicit blocked exposure reporting. Coordinator and submission are opt-in and not wired to runtime; PE-04 owns full live-readiness/runtime injection. |
-| PE-04 | PARTIAL | **Complete live-readiness wiring.** Construct and inject real broker-authentication, contract-master, fresh market-data, persistence, reconciliation and portfolio-risk dependencies in the runtime. Every required gate must fail closed; startup recovery alone is insufficient. |
+| PE-02 | COMPLETE | **Kite order-placement adapter.** Added a BFO SENSEX-only LIMIT adapter with refreshed-contract/token/symbol checks, whole-lot and tick-aligned price validation, NRML/DAY/regular order policy, deterministic 20-character alphanumeric tag derived from the durable client key, exact same-day order-book lookup bound to persisted order identity, guarded LIMIT modify/cancel, response/status validation, and a conservative per-process request throttle. Kite tags are correlation hints, not broker-side idempotency guarantees; the durable submission boundary never retries uncertain submissions, and missing/ambiguous lookup results remain blocked. PE-04 constructs this adapter in the runtime for readiness/dependency checks only; live submission remains disabled by default. |
+| PE-03 | COMPLETE | **Durable live multi-leg execution and recovery.** Implemented in `live_execution.py`: immutable durable LIMIT intents, fill-ledger gating, one-shot broker submission/recovery, confirmed cancel-before-replace, partial/reject/timeout handling, cancel/fill race recovery, short-first residual cleanup, unresolved-opening-order close protection and explicit blocked exposure reporting. The coordinator and submission service remain opt-in and are not invoked by Telegram; PE-04 wires the readiness dependency graph only. |
+| PE-04 | COMPLETE | **Complete live-readiness wiring.** Telegram runtime constructs and injects authenticated Kite read-only and order adapters, current BFO contract master, paired CE/PE quotes (2-second freshness, depth/volume/spread/skew checks), SQLite quick-check, durable position/order lifecycles, broker reconciliation, live account funds/margin checks, adaptive portfolio-risk gate and explicit Kite static-IP confirmation. Both /resume and /confirm_live evaluate every gate. Missing dependencies deny readiness. The portfolio risk gate requires authoritative PE-06 equity/drawdown snapshots and therefore intentionally remains false until PE-06 is complete; no risk values are fabricated and live submission remains disabled. |
 | PE-05 | NOT STARTED | **Managed emergency close-all.** Implement the specified halt, reconcile, cancel-safe-pending-entry, protect/close structure-aware sequencing, per-leg fill verification, retries only after idempotency/status checks, final flat reconciliation, and explicit residual-exposure reporting. |
 | PE-06 | PARTIAL | **Complete equity and portfolio risk accounting.** Finish authoritative net-equity/deposit/withdrawal/P&L/charges/cash/margin accounting, dynamic risk and lot sizing, drawdown enforcement, and reconciliation of risk against actual filled exposure and broker margin. |
 | PE-07 | PARTIAL | **Portfolio Greeks and scenario stress.** Complete aggregate Greeks and multi-leg/multi-expiry stress calculations, including defined-risk verification and their use in candidate, sizing, monitoring and readiness gates. |
@@ -964,3 +966,18 @@ unless it is explicitly required by this document.
 - Push CI: https://github.com/artvibe1999/sensex-options-portfolio-engine/actions/runs/46006148413 — passed.
 - Pull-request CI: https://github.com/artvibe1999/sensex-options-portfolio-engine/actions/runs/46006138830 — passed.
 - PR #1 remains open, draft and unmerged. No deployment or live order was performed.
+
+
+## PE-04 — full runtime live-readiness wiring
+- `build_application_from_settings` now constructs shared `PositionLifecycle` and `OrderLifecycle` services and injects the runtime readiness provider into Telegram command dispatch.
+- With Kite credentials, the runtime constructs `KiteReadOnlyAdapter`, `KiteOrderExecutionAdapter`, and `LiveReadinessService`; broker, adapter, store, lifecycle services and readiness service are retained in `application.bot_data`. The execution adapter is never invoked by PE-04.
+- `LiveReadinessService` now explicitly checks broker authentication, persistence health, execution prerequisites, fresh contract master, market-data timestamp, broker reconciliation and portfolio-risk clearance. Missing providers and exceptions reject readiness.
+- Added `SqliteStore.health_check()` using SQLite quick-check and table-read probes.
+- Added authenticated `KiteReadOnlyAdapter.margins("equity")` access and a live margin-readiness gate. It validates enabled segment, available cash/live balance, positive net funds, finite broker margin values and configured margin-utilisation ceiling.
+- Added paired same-expiry/same-strike SENSEX CE/PE quote checks: maximum age 2 seconds, maximum bid/ask spread 3%, positive top depth and volume, and maximum quote timestamp skew 2 seconds.
+- Added explicit `KITE_STATIC_IP_CONFIRMED` setting, default false. It must only be enabled after the account's static IP has been registered with Kite. Zerodha states that order requests from unregistered IPs are rejected.
+- Added adaptive portfolio risk readiness checks for equity, available margin, peak-equity drawdown, daily loss, weekly/monthly drawdown, maximum concurrent positions, daily entries and aggregate open risk.
+- PE-06 remains incomplete, so no authoritative portfolio risk snapshot provider is currently supplied by the runtime. The live risk gate explicitly rejects readiness until that dependency exists. This prevents false approval while preserving PE-04's complete wiring.
+- If Kite credentials or the optional SDK are missing, runtime construction falls back to a deny-all provider and keeps startup in PAPER mode with entries paused. No credentials are logged.
+- `/resume` and `/confirm_live` both evaluate the full readiness provider; startup recovery alone cannot enable trading.
+- PE-04 does not enable order submission, activate the PE-03 coordinator, merge the PR, or deploy the application.
