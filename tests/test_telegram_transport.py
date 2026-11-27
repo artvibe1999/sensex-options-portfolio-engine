@@ -10,6 +10,7 @@ from sensex_engine.telegram_auth import TelegramAllowlist, parse_id_allowlist
 from sensex_engine.telegram_control import OperationsController
 from sensex_engine.telegram_transport import (
     _sqlite_database_path,
+    build_supervised_monitor_from_settings,
     dispatch_command,
     operations_from_settings,
     run_startup_recovery_from_settings,
@@ -232,3 +233,51 @@ def test_runtime_startup_reconciliation_failure_keeps_gate_closed(tmp_path):
 
     assert result is not None and not result.recovery_complete
     assert not operations.startup_recovery_complete
+
+
+
+def test_supervised_monitor_forces_paper_and_pauses_on_broker_mismatch(tmp_path):
+    async def scenario():
+        store = SqliteStore(tmp_path / "supervised-monitor.sqlite3")
+        operations = _operations(mode=TradingMode.LIVE, paused=False)
+        broker = StartupBroker(authenticated=False)
+        settings = SimpleNamespace(
+            kite_api_key="api-key",
+            kite_access_token="access-token",
+            kite_monitor_poll_interval_seconds=10,
+            kite_monitor_max_stale_seconds=30,
+            kite_monitor_retry_max_seconds=5,
+        )
+        alerts = []
+        monitor = build_supervised_monitor_from_settings(
+            settings,
+            store=store,
+            operations=operations,
+            alert_sender=lambda healthy, reason: alerts.append((healthy, reason)),
+            broker_factory=lambda *_: broker,
+        )
+        assert monitor is not None
+        await monitor.start()
+        for _ in range(100):
+            if alerts:
+                break
+            await asyncio.sleep(0.01)
+        assert alerts and alerts[0][0] is False
+        assert operations.mode.mode is TradingMode.PAPER
+        assert operations.paused
+        assert not operations.startup_recovery_complete
+        await monitor.stop()
+
+    asyncio.run(scenario())
+
+
+def test_supervised_monitor_is_not_created_without_broker_credentials(tmp_path):
+    store = SqliteStore(tmp_path / "supervised-no-creds.sqlite3")
+    operations = _operations()
+    monitor = build_supervised_monitor_from_settings(
+        SimpleNamespace(kite_api_key="", kite_access_token=""),
+        store=store,
+        operations=operations,
+        broker_factory=lambda *_: pytest.fail("broker must not be constructed"),
+    )
+    assert monitor is None
