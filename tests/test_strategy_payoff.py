@@ -81,7 +81,6 @@ def test_payoff_rejects_net_short_call_unbounded_risk():
 
 
 def test_directional_selector_uses_strike_beyond_selected_long_leg():
-    expiry = datetime(2026, 12, 31, tzinfo=UTC)
     now = datetime(2026, 11, 27, 5, 0, tzinfo=UTC)
     items = (
         _item(11, "80200", Right.CE, "450"),
