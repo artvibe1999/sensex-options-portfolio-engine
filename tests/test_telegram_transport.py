@@ -6,7 +6,11 @@ from sensex_engine.mode import ModeController
 from sensex_engine.persistence import SqliteStore
 from sensex_engine.telegram_auth import TelegramAllowlist, parse_id_allowlist
 from sensex_engine.telegram_control import OperationsController
-from sensex_engine.telegram_transport import dispatch_command, operations_from_settings
+from sensex_engine.telegram_transport import (
+    _sqlite_database_path,
+    dispatch_command,
+    operations_from_settings,
+)
 
 
 class FakeMessage:
@@ -123,3 +127,16 @@ def test_operations_factory_uses_configured_telegram_allowlists():
     operations = operations_from_settings(settings)
     assert operations.allowlist.allows(11, -22)
     assert not operations.allowlist.allows(13, -22)
+
+
+
+def test_telegram_entrypoint_accepts_only_sqlite_database_urls():
+    assert _sqlite_database_path("sqlite:///./portfolio.db") == "./portfolio.db"
+    assert _sqlite_database_path("sqlite:////var/lib/portfolio.db") == "/var/lib/portfolio.db"
+    assert _sqlite_database_path("sqlite:///:memory:") == ":memory:"
+    try:
+        _sqlite_database_path("postgresql://localhost/portfolio")
+    except ValueError as exc:
+        assert "SQLite DATABASE_URL" in str(exc)
+    else:
+        raise AssertionError("unsupported database URL must be rejected")
