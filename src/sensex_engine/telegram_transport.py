@@ -183,26 +183,71 @@ def build_application_from_settings(
     readiness_provider: ReadinessProvider | None = None,
     post_init: Callable[[Any], Any] | None = None,
     post_shutdown: Callable[[Any], Any] | None = None,
+    broker_factory: Callable[[str, str], Any] | None = None,
+    portfolio_snapshot_provider: Callable[[], Any] | None = None,
 ) -> Any:
-    """Build the actual polling application from environment-backed settings.
+    """Build Telegram with real Kite readiness dependencies and paper-only startup.
 
-    This default entrypoint deliberately supplies no readiness provider, so
-    /resume and /confirm_live remain disabled until real safety services exist.
+    When Kite credentials are present, this constructs the authenticated read-only
+    broker, order adapter, contract/quote freshness checks, SQLite health check,
+    reconciliation and portfolio-risk gate. Missing credentials or any construction
+    failure installs a provider that denies both readiness flags.
     """
     store = SqliteStore(_sqlite_database_path(settings.database_url))
     from .order_lifecycle import OrderLifecycle
     from .portfolio_queries import PortfolioQueryService
     from .position_lifecycle import PositionLifecycle
 
-    portfolio_queries = PortfolioQueryService(
-        positions=PositionLifecycle(store),
-        orders=OrderLifecycle(store),
-    )
-    operations = operations_from_settings(
-        settings, portfolio_queries=portfolio_queries
-    )
+    positions = PositionLifecycle(store)
+    orders = OrderLifecycle(store)
+    portfolio_queries = PortfolioQueryService(positions=positions, orders=orders)
+    operations = operations_from_settings(settings, portfolio_queries=portfolio_queries)
+    operations.mode.force_paper()
+    operations.paused = True
+    operations.startup_recovery_complete = False
     if not operations.allowlist.user_ids or not operations.allowlist.chat_ids:
         raise ValueError("Telegram user and chat allowlists must both be configured")
+
+    runtime_broker = None
+    order_execution_adapter = None
+    live_readiness_service = None
+    if readiness_provider is None:
+        readiness_provider = lambda: (False, False)
+        def secret_value(value: Any) -> str:
+            getter = getattr(value, "get_secret_value", None)
+            raw = getter() if callable(getter) else value
+            return str(raw or "").strip()
+
+        api_key = secret_value(getattr(settings, "kite_api_key", ""))
+        access_token = secret_value(getattr(settings, "kite_access_token", ""))
+        if api_key and access_token:
+            try:
+                from .kite import KiteReadOnlyAdapter
+                from .kite_execution import KiteOrderExecutionAdapter
+                from .runtime_readiness import build_kite_live_readiness_service
+
+                factory = broker_factory or KiteReadOnlyAdapter.from_credentials
+                runtime_broker = factory(api_key, access_token)
+                order_execution_adapter = KiteOrderExecutionAdapter(runtime_broker)
+                live_readiness_service = build_kite_live_readiness_service(
+                    broker=runtime_broker,
+                    store=store,
+                    position_lifecycle=positions,
+                    order_lifecycle=orders,
+                    settings=settings,
+                    portfolio_snapshot_provider=portfolio_snapshot_provider,
+                )
+                readiness_provider = live_readiness_service
+            except Exception as exc:
+                logger.error(
+                    "Live readiness dependencies could not be constructed: %s",
+                    type(exc).__name__,
+                )
+        else:
+            logger.error(
+                "Live readiness is disabled: Kite credentials are missing"
+            )
+
     application = create_telegram_application(
         settings.telegram_bot_token,
         operations=operations,
@@ -213,6 +258,11 @@ def build_application_from_settings(
     )
     application.bot_data["operations_controller"] = operations
     application.bot_data["portfolio_store"] = store
+    application.bot_data["position_lifecycle"] = positions
+    application.bot_data["order_lifecycle"] = orders
+    application.bot_data["kite_broker"] = runtime_broker
+    application.bot_data["kite_order_execution_adapter"] = order_execution_adapter
+    application.bot_data["live_readiness_service"] = live_readiness_service
     return application
 
 
