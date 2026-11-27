@@ -116,6 +116,10 @@ def test_exact_tag_lookup_maps_order_states_without_treating_ack_as_fill():
         "tag": tag,
         "order_id": "kite-open",
         "status": "OPEN",
+        "exchange": "BFO",
+        "tradingsymbol": "SENSEX26DEZ80000CE",
+        "transaction_type": "BUY",
+        "quantity": 20,
     }]
     matches = adapter.find_orders_by_client_key("client-1")
     assert len(matches) == 1
@@ -127,8 +131,8 @@ def test_duplicate_tag_matches_are_returned_for_durable_layer_to_block():
     client, adapter, _ = setup_adapter()
     tag = adapter.tag_for_client_key("client-2")
     client.order_rows = [
-        {"tag": tag, "order_id": "kite-a", "status": "OPEN"},
-        {"tag": tag, "order_id": "kite-b", "status": "COMPLETE"},
+        {"tag": tag, "order_id": "kite-a", "status": "OPEN", "exchange": "BFO", "tradingsymbol": "SENSEX26DEZ80000CE", "transaction_type": "BUY", "quantity": 20},
+        {"tag": tag, "order_id": "kite-b", "status": "COMPLETE", "exchange": "BFO", "tradingsymbol": "SENSEX26DEZ80000CE", "transaction_type": "SELL", "quantity": 20},
     ]
     assert len(adapter.find_orders_by_client_key("client-2")) == 2
 
@@ -234,6 +238,6 @@ def test_modify_order_checks_tick_size_lot_size_and_filled_quantity():
 def test_unknown_kite_status_is_not_guessed():
     client, adapter, _ = setup_adapter()
     tag = adapter.tag_for_client_key("unknown-status")
-    client.order_rows = [{"tag": tag, "order_id": "kite-x", "status": "SOMETHING_NEW"}]
+    client.order_rows = [{"tag": tag, "order_id": "kite-x", "status": "SOMETHING_NEW", "exchange": "BFO", "tradingsymbol": "SENSEX26DEZ80000CE", "transaction_type": "BUY", "quantity": 20}]
     with pytest.raises(ValueError, match="Unsupported Kite order status"):
         adapter.find_orders_by_client_key("unknown-status")
