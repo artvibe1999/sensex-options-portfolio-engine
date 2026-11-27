@@ -9,6 +9,7 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
+from .capital import adaptive_risk_budget, affordable_lots
 from .domain import PortfolioSnapshot
 
 ACCOUNT_ID = "account:default"
@@ -238,6 +239,54 @@ class PortfolioAccountingService:
             entries_today=int(mark["entries_today"]),
             deposits_withdrawals_today=daily_flows,
             peak_equity=peak,
+        )
+
+    def size_strategy_lots(
+        self,
+        *,
+        strategy_risk_pct: Decimal,
+        aggregate_risk_pct: Decimal,
+        allocation_pct: Decimal,
+        max_loss_per_lot: Decimal,
+        estimated_cost_per_lot: Decimal,
+        margin_per_lot: Decimal,
+        max_lots: int,
+        now: datetime | None = None,
+    ) -> int:
+        """Size whole lots from fresh equity, remaining portfolio risk and margin."""
+        snapshot = self.snapshot(now=now)
+        if snapshot is None or snapshot.peak_equity is None:
+            return 0
+        risk_pct = _decimal(strategy_risk_pct, "strategy_risk_pct")
+        aggregate_pct = _decimal(aggregate_risk_pct, "aggregate_risk_pct")
+        allocation = _decimal(allocation_pct, "allocation_pct")
+        if not (
+            Decimal("0") < risk_pct <= Decimal("1")
+            and Decimal("0") < aggregate_pct <= Decimal("1")
+            and Decimal("0") < allocation <= Decimal("1")
+        ):
+            return 0
+        budget = adaptive_risk_budget(
+            snapshot.net_liquidation_equity,
+            peak_equity=snapshot.peak_equity,
+            base_risk_pct=risk_pct,
+            base_aggregate_pct=aggregate_pct,
+        )
+        if not budget.new_entries_allowed:
+            return 0
+        remaining_risk = budget.max_aggregate_risk - snapshot.open_max_loss
+        risk_allowance = min(budget.max_trade_risk, remaining_risk)
+        allocated_margin = min(
+            snapshot.available_margin,
+            snapshot.net_liquidation_equity * allocation,
+        )
+        return affordable_lots(
+            risk_budget=risk_allowance,
+            max_loss_per_lot=_decimal(max_loss_per_lot, "max_loss_per_lot"),
+            estimated_cost_per_lot=_decimal(estimated_cost_per_lot, "estimated_cost_per_lot"),
+            available_margin=allocated_margin,
+            margin_per_lot=_decimal(margin_per_lot, "margin_per_lot"),
+            max_lots=max_lots,
         )
 
     def report(self, *, now: datetime | None = None) -> dict[str, str] | None:
