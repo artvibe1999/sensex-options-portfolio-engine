@@ -298,7 +298,12 @@ def test_emergency_command_is_allowlisted_audited_and_forces_paper(tmp_path):
 
     operations.emergency_close_all = Emergency()
     update, message = _update(301, "/emergency")
-    asyncio.run(dispatch_command(update, None, operations=operations, store=store))
+    asyncio.run(dispatch_command(
+        update, None, operations=operations, store=store,
+        readiness_provider=lambda: (_ for _ in ()).throw(
+            AssertionError("Emergency command must not wait on entry readiness")
+        ),
+    ))
     assert calls == ["executed"]
     assert operations.paused
     assert operations.mode.mode is TradingMode.PAPER
