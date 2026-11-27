@@ -1,0 +1,48 @@
+import pytest
+
+from sensex_engine.persistence import SqliteStore
+
+
+def test_event_store_is_durable_and_idempotent(tmp_path):
+    path = tmp_path / "portfolio.sqlite3"
+    store = SqliteStore(path)
+    assert store.append_event(
+        idempotency_key="intent-001",
+        event_type="POSITION_INTENT_CREATED",
+        aggregate_id="position-1",
+        payload={"lots": 2, "mode": "paper"},
+    )
+    assert not store.append_event(
+        idempotency_key="intent-001",
+        event_type="POSITION_INTENT_CREATED",
+        aggregate_id="position-1",
+        payload={"lots": 2, "mode": "paper"},
+    )
+    restarted = SqliteStore(path)
+    events = restarted.events_for("position-1")
+    assert len(events) == 1
+    assert events[0]["payload"]["mode"] == "paper"
+
+
+def test_command_audit_is_idempotent(tmp_path):
+    store = SqliteStore(tmp_path / "audit.sqlite3")
+    args = {
+        "command_id": "update-1",
+        "user_id": 100,
+        "chat_id": 200,
+        "command": "/pause",
+        "outcome": "accepted",
+    }
+    assert store.record_command(**args)
+    assert not store.record_command(**args)
+
+
+def test_event_requires_identity_fields(tmp_path):
+    store = SqliteStore(tmp_path / "events.sqlite3")
+    with pytest.raises(ValueError):
+        store.append_event(
+            idempotency_key="",
+            event_type="POSITION_OPENED",
+            aggregate_id="position-1",
+            payload={},
+        )
