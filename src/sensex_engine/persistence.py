@@ -306,9 +306,9 @@ class SqliteStore:
                         or fill_quantity <= 0
                     ):
                         raise ValueError("Invalid position leg fill parameters")
-                    if fill_phase == "OPEN" and status != "PENDING":
+                    if fill_phase == "OPEN" and status not in {"PENDING", "CLOSING", "CLOSED"}:
                         raise ValueError(
-                            "Opening fills are accepted only while position is PENDING"
+                            "Opening fills are accepted only while pending or reconciling exposure"
                         )
                     if fill_phase == "CLOSE" and status != "CLOSING":
                         raise ValueError(
@@ -326,7 +326,10 @@ class SqliteStore:
                             open_fills.get(index, 0) + (fill_quantity if index == leg_index else 0)
                             == int(leg["quantity"]) for index, leg in legs.items()
                         )
-                        payload["status"] = "OPEN" if all_open else "PENDING"
+                        payload["status"] = (
+                            "CLOSING" if status in {"CLOSING", "CLOSED"}
+                            else "OPEN" if all_open else "PENDING"
+                        )
                     else:
                         all_closed = all(
                             close_fills.get(index, 0) + (fill_quantity if index == leg_index else 0)
