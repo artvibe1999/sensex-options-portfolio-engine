@@ -1,5 +1,6 @@
 """Read-only reconciliation of internal multi-leg exposure against broker state."""
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any, Protocol
 
 
@@ -179,6 +180,68 @@ def reconcile_snapshots(
 
 class BrokerReconciliationService:
     """Fetch read-only broker state and fail closed on every adapter error."""
+
+    def reconcile_store(
+        self,
+        broker: Any,
+        *,
+        contracts: list[ContractLike],
+        position_lifecycle: Any,
+    ) -> ReconciliationReport:
+        """Reconcile broker exposure directly against durable position projections.
+
+        Remaining quantities are used rather than planned quantities, so partial fills
+        are represented accurately. Non-OPEN active aggregates still fail closed.
+        """
+        try:
+            snapshots = position_lifecycle.active_snapshots()
+            internal: list[Any] = []
+            for snapshot in snapshots:
+                status = str(snapshot["status"]).upper()
+                legs = []
+                for leg in snapshot["legs"]:
+                    remaining = int(leg["remaining_quantity"])
+                    contract = SimpleNamespace(
+                        instrument_token=int(leg["instrument_token"]),
+                        tradingsymbol=str(leg["tradingsymbol"]),
+                        lot_size=1,
+                    )
+                    legs.append(SimpleNamespace(
+                        contract=contract,
+                        side=str(leg["side"]).upper(),
+                        lots=remaining,
+                    ))
+                internal.append(SimpleNamespace(
+                    position_id=snapshot["position_id"],
+                    status=status,
+                    legs=tuple(legs),
+                    is_fully_open=bool(snapshot.get("is_fully_open", False)),
+                ))
+            report = self.reconcile(
+                broker, contracts=contracts, internal_positions=internal
+            )
+            lifecycle_issues = tuple(
+                f"Internal position {item.position_id} is not fully OPEN (status={item.status})"
+                for item in internal
+                if item.status != "OPEN" or not item.is_fully_open
+            )
+            if not lifecycle_issues:
+                return report
+            return ReconciliationReport(
+                reconciled=False,
+                expected_quantities=report.expected_quantities,
+                broker_quantities=report.broker_quantities,
+                mismatches=report.mismatches + lifecycle_issues,
+                pending_order_ids=report.pending_order_ids,
+            )
+        except Exception as exc:
+            return ReconciliationReport(
+                reconciled=False,
+                expected_quantities=(),
+                broker_quantities=(),
+                mismatches=(f"Durable position reconciliation failed: {type(exc).__name__}",),
+                pending_order_ids=(),
+            )
 
     def reconcile(
         self,
