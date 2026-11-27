@@ -1,12 +1,11 @@
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from sensex_engine.domain import Contract, Regime, Right
+from sensex_engine.domain import Contract, OptionLeg, Regime, Right, Side
 from sensex_engine.market_data import Quote
 from sensex_engine.option_chain import OptionAnalytics, OptionChainSnapshot
 from sensex_engine.payoff import calculate_expiry_payoff
 from sensex_engine.strategy import generate_directional_verticals
-from sensex_engine.domain import OptionLeg, Side
 
 
 def _item(token: int, strike: str, right: Right, premium: str) -> OptionAnalytics:
@@ -55,7 +54,6 @@ def test_bull_and_bear_regimes_generate_only_matching_vertical_candidates():
 
 def test_payoff_rejects_mixed_expiry_and_missing_premium():
     first = _item(1, "80000", Right.CE, "500")
-    second = _item(2, "80500", Right.CE, "300")
     other = Contract(
         "OTHER", 3, datetime(2027, 1, 1, tzinfo=UTC), Decimal("80500"),
         Right.CE, 20, Decimal("0.05")
