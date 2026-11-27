@@ -13,13 +13,52 @@ class PortfolioQueryService:
     def __init__(
         self, *, positions: PositionLifecycle, orders: OrderLifecycle,
         max_items: int = 12, max_message_chars: int = 3500,
+        accounting: Any | None = None,
     ) -> None:
         if max_items < 1 or max_message_chars < 256:
             raise ValueError("Portfolio query output limits are invalid")
         self.positions = positions
         self.orders = orders
+        self.accounting = accounting
         self.max_items = max_items
         self.max_message_chars = max_message_chars
+
+    def pnl_text(self) -> str:
+        return self._accounting_text("pnl")
+
+    def capital_text(self) -> str:
+        return self._accounting_text("capital")
+
+    def risk_text(self) -> str:
+        return self._accounting_text("risk")
+
+    def _accounting_text(self, view: str) -> str:
+        if self.accounting is None:
+            return "Authoritative account accounting is not configured; values are unavailable and LIVE readiness remains blocked."
+        try:
+            report = self.accounting.report()
+        except Exception:
+            return "Account ledger could not be read safely; values are unavailable and LIVE readiness remains blocked."
+        if report is None:
+            return "Account equity is unavailable: opening balance or a fresh reconciled broker mark is missing, stale, or mismatched. LIVE readiness remains blocked."
+        if view == "pnl":
+            keys = ("realized_net_pnl", "unrealized_pnl", "net_liquidation_equity")
+        elif view == "capital":
+            keys = ("opening_equity", "deposits", "withdrawals", "net_liquidation_equity", "available_margin")
+        else:
+            keys = ("open_max_loss", "weekly_drawdown_pct", "monthly_drawdown_pct", "open_positions", "entries_today")
+        labels = {
+            "realized_net_pnl": "Realised net P&L", "unrealized_pnl": "Unrealised P&L",
+            "net_liquidation_equity": "Net liquidation equity", "opening_equity": "Opening equity",
+            "deposits": "Deposits", "withdrawals": "Withdrawals", "available_margin": "Available margin",
+            "open_max_loss": "Open defined max loss", "weekly_drawdown_pct": "Weekly drawdown %",
+            "monthly_drawdown_pct": "Monthly drawdown %", "open_positions": "Open positions",
+            "entries_today": "Entries today",
+        }
+        return self._limit("\\n".join(
+            [f"Reconciled account {view.upper()} (INR):"] +
+            [f"{labels[key]}: {report[key]}" for key in keys]
+        ))
 
     def positions_text(self) -> str:
         try:
