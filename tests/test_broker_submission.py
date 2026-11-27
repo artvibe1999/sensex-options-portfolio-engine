@@ -1,3 +1,5 @@
+import pytest
+
 from sensex_engine.broker_submission import (
     BrokerOrderReceipt,
     BrokerOrderStatus,
@@ -6,8 +8,6 @@ from sensex_engine.broker_submission import (
 from sensex_engine.execution import LegExecutionAction
 from sensex_engine.order_lifecycle import OrderLifecycle, OrderState
 from sensex_engine.persistence import SqliteStore
-
-import pytest
 
 
 ACTION = LegExecutionAction(
