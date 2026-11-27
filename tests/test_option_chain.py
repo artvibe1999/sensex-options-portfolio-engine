@@ -78,3 +78,15 @@ def test_chain_fails_closed_on_stale_underlying_or_naive_clock():
         assert "timezone-aware" in str(exc)
     else:
         raise AssertionError("naive clock must be rejected")
+
+
+def test_chain_rejects_quotes_off_contract_tick_grid():
+    now = datetime(2026, 11, 27, 5, 0, tzinfo=UTC)
+    contract = _contract(1, Right.CE)
+    quote = _quote(1, now, bid="500.01", ask="501.01")
+    snapshot = build_option_chain(
+        [contract], {1: quote}, underlying_price=Decimal("80000"),
+        underlying_timestamp=now, as_of=now, risk_free_rate=Decimal("0.06"),
+    )
+    assert not snapshot.analytics
+    assert snapshot.rejected[0].reason == "Quote prices violate contract tick size"
