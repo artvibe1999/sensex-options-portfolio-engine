@@ -1,4 +1,4 @@
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from decimal import Decimal
 from types import SimpleNamespace
 
@@ -7,8 +7,8 @@ from sensex_engine.emergency_close import (
     EmergencyCloseAllService,
     build_emergency_limit_price_provider,
 )
-from sensex_engine.mode import ModeController
 from sensex_engine.market_data import Quote
+from sensex_engine.mode import ModeController
 from sensex_engine.order_lifecycle import OrderLifecycle, OrderState
 from sensex_engine.persistence import SqliteStore
 from sensex_engine.position_lifecycle import PositionLifecycle
@@ -112,7 +112,9 @@ class FakeCoordinator:
         raise AssertionError("No positions should require closing in this test")
 
 
-def _service(tmp_path, *, broker=None, static_ip=True, submission=None, history=None, coordinator=None):
+def _service(
+    tmp_path, *, broker=None, static_ip=True, submission=None, history=None, coordinator=None
+):
     store = SqliteStore(tmp_path / "emergency.sqlite3")
     orders = OrderLifecycle(store)
     positions = PositionLifecycle(store)
