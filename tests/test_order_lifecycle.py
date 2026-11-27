@@ -143,3 +143,42 @@ def test_fill_idempotency_key_reuse_with_different_data_is_rejected(tmp_path):
             order_id="internal-1", fill_id="fill-1", quantity=4,
             price=Decimal("101"), filled_at="2026-11-27T10:00:00+05:30",
         )
+
+
+
+def test_database_guard_rejects_stale_transition_from_second_instance(tmp_path):
+    path = tmp_path / "shared.sqlite3"
+    first = make_ledger(tmp_path)
+    second = OrderLifecycle(SqliteStore(path))
+    assert first.transition(
+        order_id="internal-1", new_state=OrderState.VALIDATED, update_id="first"
+    )
+    with pytest.raises(RuntimeError, match="changed concurrently"):
+        second.transition(
+            order_id="internal-1", new_state=OrderState.REJECTED, update_id="stale"
+        )
+    assert second.snapshot("internal-1")["state"] == "VALIDATED"
+
+
+def test_database_guard_prevents_cross_instance_fill_overrun(tmp_path):
+    path = tmp_path / "shared.sqlite3"
+    first = make_ledger(tmp_path)
+    second = OrderLifecycle(SqliteStore(path))
+    for state, update_id in (
+        (OrderState.VALIDATED, "v1"),
+        (OrderState.SUBMITTING, "s1"),
+        (OrderState.ACKNOWLEDGED, "a1"),
+    ):
+        first.transition(order_id="internal-1", new_state=state, update_id=update_id)
+    assert first.record_fill(
+        order_id="internal-1", fill_id="fill-a", quantity=15,
+        price=Decimal("100"), filled_at="2026-11-27T10:00:00+05:30",
+    )
+    with pytest.raises(RuntimeError, match="changed concurrently"):
+        second.record_fill(
+            order_id="internal-1", fill_id="fill-b", quantity=10,
+            price=Decimal("101"), filled_at="2026-11-27T10:00:01+05:30",
+        )
+    snapshot = second.snapshot("internal-1")
+    assert snapshot["filled_quantity"] == 15
+    assert snapshot["remaining_quantity"] == 5
