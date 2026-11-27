@@ -8,8 +8,8 @@ are gated on the fill ledger, not order acknowledgements.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Callable
 from decimal import Decimal
-from typing import Callable
 
 from .broker_submission import DurableBrokerSubmissionService
 from .domain import Position, TradingMode
@@ -113,7 +113,9 @@ class LiveMultiLegExecutionCoordinator:
             raise ValueError("Position leg count differs from its immutable durable plan")
         for expected, actual in zip(legs, actual_legs, strict=True):
             if any(actual[key] != expected[key] for key in expected):
-                raise ValueError("Position contract or quantity differs from its immutable durable plan")
+                raise ValueError(
+                    "Position contract or quantity differs from its immutable durable plan"
+                )
 
     def _open(self, position: Position, position_id: str) -> LiveExecutionReport:
         snapshot = self._positions.snapshot(position_id)
@@ -312,7 +314,9 @@ class LiveMultiLegExecutionCoordinator:
                 if quantity <= 0:
                     break
                 if quantity % leg.contract.lot_size:
-                    self._mark_position_error(position_id, "Residual quantity is not a whole contract lot")
+                    self._mark_position_error(
+                        position_id, "Residual quantity is not a whole contract lot"
+                    )
                     return outcomes
                 side = "BUY" if leg.side.value == "SELL" else "SELL"
                 action = LegExecutionAction(
