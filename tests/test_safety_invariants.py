@@ -139,3 +139,22 @@ def test_risk_engine_reduces_trade_budget_after_equity_drawdown():
     )
     assert not decision.approved
     assert "adaptive per-trade" in decision.reason
+
+
+def test_risk_engine_rejects_unvalidated_volatility_expansion_strategy():
+    from dataclasses import replace
+
+    candidate = replace(
+        make_candidate(),
+        regime=Regime.VOLATILITY_EXPANSION,
+    )
+    decision = RiskEngine().evaluate(
+        candidate,
+        make_portfolio(),
+        estimated_margin=Decimal("1000"),
+        data_is_fresh=True,
+        contracts_are_current=True,
+        broker_reconciled=True,
+    )
+    assert not decision.approved
+    assert "separately validated" in decision.reason
