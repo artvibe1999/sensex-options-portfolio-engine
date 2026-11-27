@@ -284,3 +284,26 @@ def test_same_broker_order_id_cannot_be_correlated_to_two_intents(tmp_path):
             update_id="ack",
             broker_order_id="kite-order-1",
         )
+
+
+def test_multiple_partial_fills_complete_one_order_without_overcounting(tmp_path):
+    service, orders, positions = setup_ingestion(tmp_path)
+
+    first = service.ingest(event(
+        broker_trade_id="partial-1",
+        quantity=4,
+        price=Decimal("100"),
+    ))
+    second = service.ingest(event(
+        broker_trade_id="partial-2",
+        quantity=6,
+        price=Decimal("102"),
+    ))
+
+    assert first.order_state == OrderState.PARTIALLY_FILLED.value
+    assert second.order_state == OrderState.FILLED.value
+    order = orders.snapshot("order-open-long")
+    leg = positions.snapshot("position-1")["legs"][0]
+    assert order["filled_quantity"] == 10
+    assert leg["opened_quantity"] == 10
+    assert leg["open_average_price"] == "101.2"
