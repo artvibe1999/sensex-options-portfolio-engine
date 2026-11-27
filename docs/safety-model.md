@@ -43,3 +43,23 @@ match the exact attempt number that acquired the lease, so a stale worker cannot
 finalize or reset a receipt after another worker has reclaimed it. A stale worker
 may still finish an idempotent projection replay, but it cannot change the newer
 worker's inbox state.
+
+
+
+## Kite trade-history fill backfill
+
+`KiteTradeHistoryIngestor` is a read-only transport adapter around Kite's per-order
+`order_trades(order_id)` API. A caller supplies explicit internal order IDs for
+the current polling cycle; the adapter resolves each to its durable broker order ID,
+fetches individual exchange trades, validates BFO, order ID, token, symbol, side,
+quantity, price and fill timestamp, then sends normalized events through the durable
+fill inbox. The fill phase is derived by comparing the durable order side with its
+original position-leg side (same side = OPEN; inverse side = CLOSE).
+
+This adapter does not place, modify or cancel orders and does not create a polling
+loop. Callers must select current-session order IDs: Kite's order and trade books
+are transient and available for the current day only. Persisted inbox receipts and
+portfolio events remain the durable local record. Repeated polling is idempotent
+through the broker order/trade ID inbox key. WebSocket/postback acquisition,
+reconnect scheduling, missed-event orchestration and production runtime wiring
+remain separate work.
