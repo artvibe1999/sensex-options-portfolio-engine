@@ -85,7 +85,10 @@ not itself a scheduler and does not replace asynchronous Kite postbacks/websocke
 orders created during the current IST session using Kite per-order trade history,
 and (3) reconcile durable positions and orders against read-only broker state.
 It refuses non-current session dates, stops before broker polling if local receipt
-replay fails, and sets `recovery_complete` only when the final broker reconciliation passes.
+replay fails, replays up to 1,000 pending receipts per startup pass, and explicitly
+checks that no unprocessed or actively leased receipts remain before proceeding.
+Any remaining receipt blocks backfill and reconciliation. It sets
+`recovery_complete` only when the inbox is clear and final broker reconciliation passes.
 The caller must keep entries paused unless `StartupRecoveryResult.recovery_complete` is true.
 This service does not schedule itself, enable live mode, or submit/cancel orders;
 runtime wiring, recurring polling, and operational supervision remain required.
