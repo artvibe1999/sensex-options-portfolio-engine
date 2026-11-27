@@ -161,3 +161,90 @@ def test_reconciliation_ignores_non_bfo_positions_outside_engine_scope():
         broker_orders=[],
     )
     assert report.reconciled
+
+
+def test_reconcile_store_uses_actual_filled_quantities(tmp_path):
+    from sensex_engine.persistence import SqliteStore
+    from sensex_engine.position_lifecycle import PositionLifecycle
+
+    lifecycle = PositionLifecycle(SqliteStore(tmp_path / "positions.sqlite3"))
+    lifecycle.create(
+        position_id="durable-1", strategy_id="BULL_CALL", mode="paper",
+        idempotency_key="create-durable",
+        legs=[
+            {"leg_index": 0, "instrument_token": 1, "tradingsymbol": "SENSEX80000CE",
+             "side": "BUY", "quantity": 20},
+            {"leg_index": 1, "instrument_token": 2, "tradingsymbol": "SENSEX80500CE",
+             "side": "SELL", "quantity": 20},
+        ],
+    )
+    lifecycle.record_leg_fill(
+        position_id="durable-1", leg_index=0, phase="OPEN", fill_id="open-a",
+        quantity=20, price=Decimal("100"), filled_at="2026-11-27T10:00:00+05:30",
+    )
+    lifecycle.record_leg_fill(
+        position_id="durable-1", leg_index=1, phase="OPEN", fill_id="open-b",
+        quantity=20, price=Decimal("50"), filled_at="2026-11-27T10:00:01+05:30",
+    )
+
+    class Broker:
+        def is_authenticated(self):
+            return True
+
+        def positions(self):
+            return {"net": [
+                {"exchange": "BFO", "instrument_token": 1, "quantity": 20},
+                {"exchange": "BFO", "instrument_token": 2, "quantity": -20},
+            ]}
+
+        def orders(self):
+            return []
+
+    contracts = [
+        _contract(1, "SENSEX80000CE", "80000"),
+        _contract(2, "SENSEX80500CE", "80500"),
+    ]
+    report = BrokerReconciliationService().reconcile_store(
+        Broker(), contracts=contracts, position_lifecycle=lifecycle,
+    )
+    assert report.reconciled
+    assert report.expected_quantities == ((1, 20), (2, -20))
+
+
+def test_reconcile_store_fails_closed_for_partial_position(tmp_path):
+    from sensex_engine.persistence import SqliteStore
+    from sensex_engine.position_lifecycle import PositionLifecycle
+
+    lifecycle = PositionLifecycle(SqliteStore(tmp_path / "partial.sqlite3"))
+    lifecycle.create(
+        position_id="partial-1", strategy_id="BULL_CALL", mode="paper",
+        idempotency_key="create-partial",
+        legs=[
+            {"leg_index": 0, "instrument_token": 1, "tradingsymbol": "SENSEX80000CE",
+             "side": "BUY", "quantity": 20},
+            {"leg_index": 1, "instrument_token": 2, "tradingsymbol": "SENSEX80500CE",
+             "side": "SELL", "quantity": 20},
+        ],
+    )
+    lifecycle.record_leg_fill(
+        position_id="partial-1", leg_index=0, phase="OPEN", fill_id="partial-open",
+        quantity=10, price=Decimal("100"), filled_at="2026-11-27T10:00:00+05:30",
+    )
+
+    class Broker:
+        def is_authenticated(self):
+            return True
+
+        def positions(self):
+            return {"net": [{"exchange": "BFO", "instrument_token": 1, "quantity": 10}]}
+
+        def orders(self):
+            return []
+
+    report = BrokerReconciliationService().reconcile_store(
+        Broker(), contracts=[_contract(1, "SENSEX80000CE", "80000"),
+                             _contract(2, "SENSEX80500CE", "80500")],
+        position_lifecycle=lifecycle,
+    )
+    assert not report.reconciled
+    assert any("not fully OPEN" in item for item in report.mismatches)
