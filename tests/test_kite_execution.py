@@ -27,6 +27,9 @@ class FakeKite:
         self.cancel_calls = []
         self.history = {}
 
+    def profile(self):
+        return {"user_id": "TEST"}
+
     def instruments(self, exchange):
         assert exchange == "BFO"
         return self.rows
@@ -258,3 +261,12 @@ def test_unknown_kite_status_is_not_guessed():
     }]
     with pytest.raises(ValueError, match="Unsupported Kite order status"):
         adapter.find_orders_by_client_key("unknown-status")
+
+
+
+def test_order_submission_requires_authenticated_kite_session():
+    client, adapter, action = setup_adapter()
+    client.profile = lambda: (_ for _ in ()).throw(RuntimeError("expired"))
+    with pytest.raises(PermissionError, match="authentication"):
+        adapter.submit_order(action, client_order_key="expired-session")
+    assert client.place_calls == []
