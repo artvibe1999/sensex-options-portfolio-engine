@@ -239,6 +239,9 @@ def main() -> None:
         level=os.environ.get("LOG_LEVEL", "INFO"),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    # httpx logs every request URL at INFO; Telegram URLs embed the bot token.
+    for noisy in ("httpx", "httpcore"):
+        logging.getLogger(noisy).setLevel(logging.WARNING)
     settings = Settings()
     stop = threading.Event()
     holder: dict[str, Any] = {}
