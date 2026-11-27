@@ -182,6 +182,8 @@ def test_cancel_requires_exact_tag_bfo_sensex_contract_and_open_status():
         "tradingsymbol": action.tradingsymbol,
         "status": "OPEN",
         "variety": "regular",
+        "quantity": 20,
+        "transaction_type": "BUY",
     }]
     result = adapter.cancel_order("kite-open", client_order_key="cancel-key")
     assert result.status is BrokerOrderStatus.OPEN
@@ -199,6 +201,8 @@ def test_cancel_refuses_wrong_client_key_or_terminal_order():
         "tradingsymbol": action.tradingsymbol,
         "status": "COMPLETE",
         "variety": "regular",
+        "quantity": 20,
+        "transaction_type": "BUY",
     }]
     with pytest.raises(ValueError, match="does not match"):
         adapter.cancel_order("kite-done", client_order_key="wrong-key")
@@ -220,6 +224,7 @@ def test_modify_order_checks_tick_size_lot_size_and_filled_quantity():
         "variety": "regular",
         "quantity": 40,
         "filled_quantity": 20,
+        "transaction_type": "BUY",
     }]
     result = adapter.modify_order(
         "kite-open", client_order_key="modify-key",
