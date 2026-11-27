@@ -196,6 +196,10 @@ class EmergencyCloseAllService:
                     )
                     cancelled.append(order_id)
                     continue
+                if state is OrderState.VALIDATED and phase == "CLOSE":
+                    # A durable, not-yet-submitted close intent is safe to resume
+                    # through the coordinator after the portfolio preflight.
+                    continue
                 self._submission.refresh_order(order_id)
                 self._poll_order(order_id)
                 current = self._orders.snapshot(order_id)
@@ -213,10 +217,13 @@ class EmergencyCloseAllService:
                     self._poll_order(order_id)
                     current = self._orders.snapshot(order_id)
                     state = OrderState(current["state"]) if current else OrderState.UNKNOWN
-                if state in _TERMINAL:
-                    if phase == "OPEN" and state in {
-                        OrderState.CANCELLED, OrderState.REJECTED, OrderState.EXPIRED,
-                    }:
+                if state in _TERMINAL or current.get("cancel_confirmed", False):
+                    if phase == "OPEN" and (
+                        state in {
+                            OrderState.CANCELLED, OrderState.REJECTED, OrderState.EXPIRED,
+                        }
+                        or current.get("cancel_confirmed", False)
+                    ):
                         cancelled.append(order_id)
                 else:
                     unresolved.append(order_id)
