@@ -139,7 +139,7 @@ class OperationsController:
                 f"startup_recovery_complete={self.startup_recovery_complete}"
             )
             if self.engine is not None:
-                text += "\n" + self.engine.status_text()
+                return self.engine.status_text()
             return text
         if normalized in {"/help", "/start"}:
             return help_text()
@@ -196,6 +196,8 @@ class OperationsController:
         if normalized in {"/pnl", "/capital", "/risk"} and self.engine is not None:
             if normalized == "/pnl":
                 return self.engine.pnl_text()
+            if normalized == "/risk":
+                return self.engine.risk_text()
             return self.engine.capital_text()
         if normalized == "/strategies" and self.engine is not None:
             return self.engine.strategies_text()

@@ -420,10 +420,19 @@ def test_status_and_report_texts(tmp_path, monkeypatch):
     )
     assert "No strategy evaluation" in engine.strategies_text()
     engine.cycle()
-    assert "SENSEX" in engine.status_text() and "tier=medium" in engine.status_text()
-    assert S.BULL_CALL in engine.strategies_text()
+    assert "SENSEX" in engine.status_text() and "Capital tier: medium" in engine.status_text()
+    assert "1. Bull call spread: ELIGIBLE" in engine.strategies_text()
+    capital = engine.capital_text()
+    for label in ("PAPER account", "  Equity: Rs ", "  Start of day: ", "  Risk per trade: ",
+                  "  Daily loss stop: ", "  Capital tier: medium"):
+        assert label in capital, capital
+    risk = engine.risk_text()
+    assert "Risk and limits" in risk and "  Week drawdown: " in risk
+    assert all(len(line) < 90 for line in capital.splitlines() + risk.splitlines())
+    status = engine.status_text()
+    assert "Mode: PAPER" in status and "  Regime: " in status
     assert "PAPER" in engine.positions_text()
-    assert "equity" in engine.capital_text()
+    assert "Equity:" in engine.capital_text()
     assert "PAPER" in engine.pnl_text()
     pid = engine.book.open_positions()[0].id
     assert engine.close_one(pid).startswith("Closed")

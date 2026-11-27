@@ -541,13 +541,17 @@ class Engine:
                 + ("Manual check required." if p.mode == "live" else "Will retry.")
             )
             return
-        legs = ", ".join(
-            f"{leg.side} {leg.tradingsymbol} {leg.entry_price}->{prices[leg.instrument_token]}"
+        legs = "\n".join(
+            f"  {leg.side} {leg.tradingsymbol}: {leg.entry_price} -> {prices[leg.instrument_token]}"
             for leg in p.legs
         )
+        from .reports import name, rs
+
         self.notifier.send(
-            f"[{p.mode.upper()}] EXIT {p.strategy_id} x{p.lots} | {reason}\n"
-            f"P&L Rs{pnl:,.2f} (charges Rs{p.entry_costs + costs:,.2f})\n{legs}"
+            f"[{p.mode.upper()}] EXIT {name(p.strategy_id)} x{p.lots}\n"
+            f"Reason: {reason}\n"
+            f"P&L: {rs(pnl, 2)} (charges {rs(p.entry_costs + costs, 2)})\n"
+            f"Legs (entry -> exit):\n{legs}"
         )
         self.book.log_decision("exit", {"position": p.id, "reason": reason, "pnl": str(pnl)}, now)
 
@@ -807,126 +811,81 @@ class Engine:
             {"position": position.id, "strategy": proposal.strategy_id, "lots": lots, "mode": mode},
             now,
         )
-        be = ", ".join(f"{b:.0f}" for b in proposal.breakevens) or "n/a (multi-expiry)"
+        from .reports import name, rs
+
+        be = ", ".join(f"{b:,.0f}" for b in proposal.breakevens) or "n/a (multi-expiry)"
+        legs_text = "\n".join(
+            f"  {side.value} {a.contract.tradingsymbol} @ {price}"
+            for (a, side), price in zip(proposal.legs, proposal.prices, strict=True)
+        )
         self.notifier.send(
-            f"[{mode.upper()}] ENTRY {proposal.strategy_id} x{lots} lot(s) "
-            f"@ spot {state.spot:,.0f}\n"
-            f"{proposal.describe_legs()}\n"
-            f"Net {'debit' if entry_net > 0 else 'credit'} Rs{abs(entry_net):,.0f} | max loss "
-            f"Rs{position.max_loss:,.0f} | max profit "
-            f"{'unbounded' if position.max_profit is None else f'Rs{position.max_profit:,.0f}'} | "
-            f"BE {be}\nScore {proposal.score:.1f} POP {proposal.pop:.0%} | {proposal.rationale}\n"
-            f"{policy.describe()}"
+            f"[{mode.upper()}] ENTRY {name(proposal.strategy_id)} x{lots} lot(s)\n"
+            f"SENSEX: {state.spot:,.0f} | regime {state.regime.value.replace('_', ' ')}\n"
+            f"Legs:\n{legs_text}\n"
+            f"Net {'debit' if entry_net > 0 else 'credit'}: {rs(abs(entry_net))}\n"
+            f"Max loss: {rs(position.max_loss)}\n"
+            f"Max profit: "
+            f"{'unbounded' if position.max_profit is None else rs(position.max_profit)}\n"
+            f"Breakeven: {be}\n"
+            f"Score: {proposal.score:.1f} | POP: {proposal.pop:.0%}\n"
+            f"Why: {proposal.rationale}\n"
+            f"Risk budget: {rs(policy.max_trade_risk)} per trade (tier {policy.tier.name})"
         )
 
     # ---------------------------------------------------------- reporting
     def _daily_summary(self, day: date) -> None:
+        from .reports import name, rs
+
         self._summary_day = day
         lines = []
         for mode in ("paper", "live"):
-            closed = [p for p in self.book.closed_positions(mode=mode, since_day=day.isoformat())]
-            if not closed and not self.book.open_positions(mode):
+            closed = self.book.closed_positions(mode=mode, since_day=day.isoformat())
+            still_open = self.book.open_positions(mode)
+            if not closed and not still_open:
                 continue
             total = sum((p.realized_pnl or Decimal("0") for p in closed), Decimal("0"))
             wins = sum(1 for p in closed if (p.realized_pnl or 0) > 0)
-            lines.append(
-                f"[{mode.upper()}] {len(closed)} trade(s), {wins} win(s), net Rs{total:,.2f}"
-            )
             lines += [
-                f"  {p.strategy_id} x{p.lots}: Rs{p.realized_pnl:,.2f} ({p.exit_reason})"
+                f"{mode.upper()}",
+                f"  Net P&L: {rs(total, 2)}",
+                f"  Trades: {len(closed)} ({wins} won)",
+            ]
+            lines += [
+                f"  - {name(p.strategy_id)} x{p.lots}: {rs(p.realized_pnl, 2)} ({p.exit_reason})"
                 for p in closed
             ]
-            if self.book.open_positions(mode):
-                lines.append(
-                    f"  WARNING: {len(self.book.open_positions(mode))} position(s) still open"
-                )
+            if still_open:
+                lines.append(f"  WARNING: {len(still_open)} position(s) still open")
+            lines.append("")
         if lines:
-            self.notifier.send(f"Daily summary {day.isoformat()}\n" + "\n".join(lines))
+            self.notifier.send(f"Daily summary {day:%d %b %Y}\n\n" + "\n".join(lines).rstrip())
 
     def status_text(self) -> str:
-        s = self.last_state
-        parts = [
-            f"engine mode={self.mode}; paper entries {'PAUSED' if self.user_paused else 'active'}",
-            f"last cycle {self.last_cycle_at:%H:%M:%S}" if self.last_cycle_at else "no cycle yet",
-        ]
-        if s is not None:
-            parts.append(
-                f"SENSEX {s.spot:,.1f} | bar {s.bar_time.astimezone(IST):%H:%M} | regime "
-                f"{s.regime.value} ({s.bias}) | ADX {s.adx:.1f} RSI {s.rsi:.1f} | VWAP "
-                f"{'n/a' if s.vwap is None else f'{s.vwap:,.1f}'} | ATM IV "
-                f"{'n/a' if s.atm_iv_near is None else f'{s.atm_iv_near:.1%}'}"
-            )
-        if self.last_policy is not None:
-            parts.append(self.last_policy.describe())
-        if self.last_arbitration:
-            parts.append(f"arbitration: {self.last_arbitration}")
-        if self.last_error:
-            parts.append(f"warning: {self.last_error}")
-        return "\n".join(parts)
+        from . import reports
+
+        return reports.status(self, self.operations)
 
     def strategies_text(self) -> str:
-        if not self.last_evaluations:
-            return "No strategy evaluation yet (runs on each completed 5-minute bar in session)."
-        return "\n".join(e.summary() for e in self.last_evaluations)[:3900]
+        from . import reports
+
+        return reports.strategies(self)
 
     def positions_text(self) -> str:
-        positions = self.book.open_positions()
-        if not positions:
-            return "No open engine positions."
-        out = []
-        for p in positions:
-            legs = ", ".join(f"{leg.side} {leg.tradingsymbol}@{leg.entry_price}" for leg in p.legs)
-            out.append(
-                f"[{p.mode.upper()}] {p.id} {p.strategy_id} x{p.lots} {p.status} | "
-                f"P&L Rs{p.meta.get('last_pnl', 'n/a')} | max loss Rs{p.max_loss:,.0f}\n  {legs}"
-            )
-        return "\n".join(out)
+        from . import reports
+
+        return reports.positions(self)
 
     def pnl_text(self) -> str:
-        today = self.clock().astimezone(IST).date()
-        lines = []
-        for mode in ("paper", "live"):
-            closed = self.book.closed_positions(mode=mode)
-            if not closed and not self.book.open_positions(mode):
-                continue
-            day = sum(
-                (
-                    p.realized_pnl or 0
-                    for p in closed
-                    if (p.closed_at or "")[:10] == today.isoformat()
-                ),
-                Decimal(0),
-            )
-            total = sum((p.realized_pnl or 0 for p in closed), Decimal(0))
-            wins = sum(1 for p in closed if (p.realized_pnl or 0) > 0)
-            gross_win = sum(
-                (p.realized_pnl for p in closed if (p.realized_pnl or 0) > 0), Decimal(0)
-            )
-            gross_loss = -sum(
-                (p.realized_pnl for p in closed if (p.realized_pnl or 0) < 0), Decimal(0)
-            )
-            pf = f"{gross_win / gross_loss:.2f}" if gross_loss else "n/a"
-            lines.append(
-                f"[{mode.upper()}] today Rs{day:,.2f} | all-time Rs{total:,.2f} over "
-                f"{len(closed)} trades, win rate {wins / len(closed):.0%}, PF {pf}"
-                if closed
-                else f"[{mode.upper()}] no closed trades yet"
-            )
-        return "\n".join(lines) or "No engine trades yet."
+        from . import reports
+
+        return reports.pnl(self)
 
     def capital_text(self) -> str:
-        now = self.clock()
-        lines = []
-        for mode in ("paper", "live") if self.live is not None else ("paper",):
-            try:
-                snap, policy = self.portfolio(mode, now)
-            except Exception as exc:
-                lines.append(f"[{mode.upper()}] UNAVAILABLE: {exc}")
-                continue
-            lines.append(
-                f"[{mode.upper()}] equity Rs{snap.net_liquidation_equity:,.2f} (start of day "
-                f"Rs{snap.start_of_day_equity:,.2f}, peak Rs{snap.peak_equity:,.2f}); open risk "
-                f"Rs{snap.open_max_loss:,.0f}; margin room Rs{snap.available_margin:,.0f}\n  "
-                f"{policy.describe()}"
-            )
-        return "\n".join(lines)
+        from . import reports
+
+        return reports.capital(self)
+
+    def risk_text(self) -> str:
+        from . import reports
+
+        return reports.capital(self, risk_view=True)

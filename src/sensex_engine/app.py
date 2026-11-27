@@ -255,15 +255,23 @@ def main() -> None:
             from .telegram_control import COMMAND_HELP
 
             await app.bot.set_my_commands(
-                [BotCommand(name, menu) for name, menu, _ in COMMAND_HELP])
+                [BotCommand(name, menu) for name, menu, _ in COMMAND_HELP]
+            )
         except Exception:
             logger.exception("Could not register the Telegram command menu")
 
         engine_ = holder["engine"]
 
         def alert(healthy: bool, reason: str) -> None:
-            status = "RECOVERED" if healthy else "UNHEALTHY - live gates closed, PAPER forced"
-            engine_.notifier.send(f"Broker monitor {status}: {reason}")
+            if holder.get("shutting_down"):
+                return  # the shutdown notice below already explains the state
+            if healthy:
+                engine_.notifier.send(f"Broker monitor OK: {reason}")
+            else:
+                engine_.notifier.send(
+                    "Broker monitor problem - live gates closed, mode forced to PAPER.\n"
+                    f"Reason: {reason}\nPaper trading continues."
+                )
 
         monitor = build_supervised_monitor_from_settings(
             holder["runtime_settings"],
@@ -278,6 +286,11 @@ def main() -> None:
         threading.Thread(target=engine_.run_forever, daemon=True, name="engine").start()
 
     async def post_shutdown(app: Any) -> None:
+        holder["shutting_down"] = True
+        holder["engine"].notifier.send(
+            "Engine stopping (restart, redeploy or VM shutdown). Open positions are kept "
+            "in the ledger and resumed on the next start, which always begins in PAPER."
+        )
         holder["engine"].stop()
         stop.set()
         monitor = holder.get("monitor")
