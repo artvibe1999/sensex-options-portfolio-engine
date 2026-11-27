@@ -1,15 +1,20 @@
 import asyncio
+import json
+from datetime import UTC, datetime, timedelta
+from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
 
-from sensex_engine.domain import TradingMode
+from sensex_engine.domain import Contract, Right, TradingMode
+from sensex_engine.market_data import Quote
 from sensex_engine.mode import ModeController
 from sensex_engine.persistence import SqliteStore
 from sensex_engine.telegram_auth import TelegramAllowlist, parse_id_allowlist
 from sensex_engine.telegram_control import OperationsController
 from sensex_engine.telegram_transport import (
     _sqlite_database_path,
+    build_application_from_settings,
     build_supervised_monitor_from_settings,
     dispatch_command,
     operations_from_settings,
@@ -349,3 +354,74 @@ def test_live_resume_and_confirmation_are_blocked_during_emergency():
         with pytest.raises(RuntimeError, match="Emergency close-all is in progress"):
             operations.handle(command, user_id=11, chat_id=22, broker_ready=True, risk_clear=True)
     assert operations.paused
+
+
+def test_runtime_constructs_accounting_and_sized_entry_but_starts_paper(tmp_path, monkeypatch):
+    from sensex_engine import telegram_transport
+
+    now = datetime.now(UTC)
+    source = tmp_path / "statement.json"
+    source.write_text(json.dumps({
+        "source": "broker_account_statement", "currency": "INR",
+        "as_of": now.isoformat(), "statement_id": "test",
+        "opening_equity": "50000", "cash_flows": [],
+        "charges_by_fill": {}, "net_liquidation_equity": "50000",
+        "cash_balance": "50000",
+    }))
+
+    class Broker:
+        _client = object()
+
+        def instruments(self):
+            expiry = now + timedelta(days=5)
+            return [
+                Contract("A", 1, expiry, Decimal("80000"), Right.CE, 20, Decimal(".05")),
+                Contract("B", 2, expiry, Decimal("80000"), Right.PE, 20, Decimal(".05")),
+            ]
+
+        def positions(self):
+            return {"net": []}
+
+        def orders(self):
+            return []
+
+        def is_authenticated(self):
+            return True
+
+        def quotes(self, tokens):
+            return {
+                token: Quote(token, datetime.now(UTC), Decimal("100"),
+                             Decimal("99"), Decimal("101"), 20, 20, 100)
+                for token in tokens
+            }
+
+        def margins(self, segment):
+            return {
+                "enabled": True, "net": "30000",
+                "available": {"cash": "30000", "live_balance": "30000"},
+                "utilised": {"debits": "0"},
+            }
+
+    def fake_application(*args, **kwargs):
+        return SimpleNamespace(bot_data={})
+
+    monkeypatch.setattr(telegram_transport, "create_telegram_application", fake_application)
+    settings = SimpleNamespace(
+        database_url=f"sqlite:///{tmp_path / 'runtime.sqlite3'}",
+        telegram_bot_token="test", telegram_allowed_user_ids="11",
+        telegram_allowed_chat_ids="22", kite_api_key="test",
+        kite_access_token="test", kite_static_ip_confirmed=True,
+        broker_account_statement_path=str(source),
+    )
+    app = build_application_from_settings(settings, broker_factory=lambda *_: Broker())
+    data = app.bot_data
+    assert data["operations_controller"].mode.mode is TradingMode.PAPER
+    assert data["operations_controller"].paused
+    assert data["accounting_refresh"] is not None
+    assert data["live_execution_coordinator"]._require_entry_approval
+    assert not data["live_execution_coordinator"]._entry_allowed()
+    assert data["portfolio_snapshot_provider"]().net_liquidation_equity == Decimal("50000")
+    assert data["live_readiness_service"].evaluate().ready
+    source.unlink()
+    assert not data["live_readiness_service"].evaluate().ready
+    assert data["portfolio_accounting"].snapshot() is None
