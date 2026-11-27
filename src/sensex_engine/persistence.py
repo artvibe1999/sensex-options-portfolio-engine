@@ -47,6 +47,16 @@ class SqliteStore:
                     payload_json TEXT NOT NULL,
                     created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS broker_fill_inbox (
+                    event_key TEXT PRIMARY KEY,
+                    payload_json TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    result_json TEXT,
+                    last_error TEXT NOT NULL DEFAULT '',
+                    received_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
                 CREATE TABLE IF NOT EXISTS command_audit (
                     audit_id INTEGER PRIMARY KEY AUTOINCREMENT,
                     command_id TEXT NOT NULL UNIQUE,
@@ -339,6 +349,128 @@ class SqliteStore:
             raise
         finally:
             connection.close()
+
+
+    def receive_broker_fill(self, *, event_key: str, payload: dict[str, Any]) -> bool:
+        """Durably receipt a broker fill before any portfolio projection is changed."""
+        if not event_key.strip():
+            raise ValueError("Broker fill event key is required")
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+        now = datetime.now(UTC).isoformat()
+        with self._connection() as connection:
+            existing = connection.execute(
+                "SELECT payload_json FROM broker_fill_inbox WHERE event_key = ?",
+                (event_key,),
+            ).fetchone()
+            if existing is not None:
+                if existing["payload_json"] != encoded:
+                    raise ValueError("Broker fill event key conflicts with existing payload")
+                return False
+            connection.execute(
+                """INSERT INTO broker_fill_inbox
+                   (event_key, payload_json, status, attempts, received_at, updated_at)
+                   VALUES (?, ?, 'RECEIVED', 0, ?, ?)""",
+                (event_key, encoded, now, now),
+            )
+            return True
+
+    def claim_broker_fill(
+        self, *, event_key: str, lease_seconds: int = 60
+    ) -> dict[str, Any] | None:
+        """Claim a receipt; expired PROCESSING claims can be safely replayed."""
+        if not event_key.strip() or lease_seconds <= 0:
+            raise ValueError("Broker fill claim identity and lease must be valid")
+        now = datetime.now(UTC)
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM broker_fill_inbox WHERE event_key = ?", (event_key,)
+            ).fetchone()
+            if row is None:
+                raise ValueError("Unknown broker fill receipt")
+            if row["status"] == "PROCESSED":
+                connection.commit()
+                return None
+            if row["status"] == "PROCESSING":
+                updated = datetime.fromisoformat(row["updated_at"])
+                if (now - updated).total_seconds() < lease_seconds:
+                    connection.commit()
+                    return None
+            attempts = int(row["attempts"]) + 1
+            connection.execute(
+                """UPDATE broker_fill_inbox
+                   SET status = 'PROCESSING', attempts = ?, updated_at = ?, last_error = ''
+                   WHERE event_key = ?""",
+                (attempts, now.isoformat(), event_key),
+            )
+            connection.commit()
+            return {
+                "event_key": event_key,
+                "payload": json.loads(row["payload_json"]),
+                "attempts": attempts,
+            }
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
+    def complete_broker_fill(
+        self, *, event_key: str, result: dict[str, Any]
+    ) -> None:
+        encoded = json.dumps(result, sort_keys=True, separators=(",", ":"), default=str)
+        with self._connection() as connection:
+            cursor = connection.execute(
+                """UPDATE broker_fill_inbox
+                   SET status = 'PROCESSED', result_json = ?, last_error = '', updated_at = ?
+                   WHERE event_key = ? AND status = 'PROCESSING'""",
+                (encoded, datetime.now(UTC).isoformat(), event_key),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("Broker fill receipt is not claimed for completion")
+
+    def fail_broker_fill(self, *, event_key: str, error: str) -> None:
+        with self._connection() as connection:
+            cursor = connection.execute(
+                """UPDATE broker_fill_inbox
+                   SET status = 'RECEIVED', last_error = ?, updated_at = ?
+                   WHERE event_key = ? AND status = 'PROCESSING'""",
+                (error[:500], datetime.now(UTC).isoformat(), event_key),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("Broker fill receipt is not claimed for failure")
+
+    def broker_fill_receipt(self, event_key: str) -> dict[str, Any] | None:
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM broker_fill_inbox WHERE event_key = ?", (event_key,)
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "event_key": row["event_key"],
+            "payload": json.loads(row["payload_json"]),
+            "status": row["status"],
+            "attempts": int(row["attempts"]),
+            "result": json.loads(row["result_json"]) if row["result_json"] else None,
+            "last_error": row["last_error"],
+        }
+
+    def pending_broker_fills(self, *, limit: int = 100) -> list[dict[str, Any]]:
+        if not 1 <= limit <= 1000:
+            raise ValueError("Broker fill inbox limit must be between 1 and 1000")
+        with self._connection() as connection:
+            rows = connection.execute(
+                """SELECT event_key FROM broker_fill_inbox
+                   WHERE status != 'PROCESSED' ORDER BY received_at LIMIT ?""",
+                (limit,),
+            ).fetchall()
+        return [
+            receipt
+            for row in rows
+            if (receipt := self.broker_fill_receipt(str(row["event_key"]))) is not None
+        ]
 
     def record_command(
         self,
