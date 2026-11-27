@@ -2,6 +2,7 @@
 from dataclasses import dataclass
 from decimal import Decimal
 
+from .capital import adaptive_risk_budget
 from .domain import PortfolioSnapshot, RiskDecision, StrategyCandidate
 
 
@@ -66,18 +67,27 @@ class RiskEngine:
         if estimated_margin > equity * self.limits.max_margin_utilization_pct:
             return reject("Margin utilization would exceed configured ceiling")
 
-        per_trade_cap = min(
-            equity * self.limits.risk_per_trade_pct,
-            equity * self.limits.max_strategy_risk_pct,
+        peak_equity = portfolio.peak_equity or equity
+        budget = adaptive_risk_budget(
+            equity,
+            peak_equity=peak_equity,
+            base_risk_pct=min(
+                self.limits.risk_per_trade_pct,
+                self.limits.max_strategy_risk_pct,
+            ),
+            base_aggregate_pct=self.limits.max_aggregate_open_risk_pct,
         )
-        if candidate.max_loss + candidate.estimated_costs > per_trade_cap:
-            return RiskDecision(False, "Candidate exceeds per-trade risk budget", per_trade_cap)
-        aggregate_cap = equity * self.limits.max_aggregate_open_risk_pct
-        remaining = aggregate_cap - portfolio.open_max_loss
-        if candidate.max_loss + candidate.estimated_costs > remaining:
+        if not budget.new_entries_allowed:
+            return reject(budget.reason)
+        per_trade_cap = budget.max_trade_risk
+        candidate_risk = candidate.max_loss + candidate.estimated_costs
+        if candidate_risk > per_trade_cap:
+            return RiskDecision(False, "Candidate exceeds adaptive per-trade risk budget", per_trade_cap)
+        remaining = budget.max_aggregate_risk - portfolio.open_max_loss
+        if candidate_risk > remaining:
             return RiskDecision(
                 False,
-                "Candidate exceeds aggregate open-risk budget",
+                "Candidate exceeds adaptive aggregate open-risk budget",
                 max(remaining, Decimal("0")),
             )
-        return RiskDecision(True, "Approved by pre-trade risk checks", per_trade_cap)
+        return RiskDecision(True, "Approved by adaptive portfolio risk checks", per_trade_cap)
