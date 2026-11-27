@@ -42,6 +42,15 @@ class PortfolioAccountingService:
     def _append(self, key: str, event_type: str, payload: dict[str, Any]) -> bool:
         if not key.strip():
             raise ValueError("A stable idempotency key is required")
+        existing = [
+            event for event in self._events()
+            if event["idempotency_key"] == f"account:{key}"
+        ]
+        if existing:
+            event = existing[0]
+            if event["event_type"] != event_type or event["payload"] != payload:
+                raise ValueError("Account ledger idempotency key conflicts with an existing event")
+            return False
         return self.store.append_event(
             idempotency_key=f"account:{key}",
             event_type=event_type,
@@ -145,7 +154,6 @@ class PortfolioAccountingService:
         deposits = withdrawals = realized = fees = Decimal("0")
         daily_realized = daily_flows = Decimal("0")
         today = current.astimezone(UTC).date()
-        trade_dates: list[tuple[date, Decimal]] = []
         for event in events:
             payload = event["payload"]
             if event["event_type"] == "ACCOUNT_CASH_FLOW":
@@ -168,7 +176,6 @@ class PortfolioAccountingService:
                 realized += pnl
                 fees += charge
                 event_date = datetime.fromisoformat(payload["occurred_at"]).astimezone(UTC).date()
-                trade_dates.append((event_date, pnl - charge))
                 if event_date == today:
                     daily_realized += pnl - charge
         equity = opening + deposits - withdrawals + realized - fees + _decimal(mark["unrealized_pnl"], "unrealized_pnl")
