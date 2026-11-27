@@ -34,6 +34,8 @@ def make_service(
         contracts_provider=lambda: ([contract], now - contract_age),
         market_data_timestamp_provider=lambda: now - market_age,
         risk_clearance_provider=lambda: risk,
+        persistence_health_provider=lambda: True,
+        execution_readiness_provider=lambda: True,
     ), now
 
 
@@ -105,6 +107,8 @@ def test_readiness_includes_unresolved_live_order_ledger(tmp_path):
         contracts_provider=lambda: ([contract], now),
         market_data_timestamp_provider=lambda: now,
         risk_clearance_provider=lambda: True,
+        persistence_health_provider=lambda: True,
+        execution_readiness_provider=lambda: True,
     )
     result = service.evaluate(now=now)
     assert not result.ready
@@ -113,3 +117,30 @@ def test_readiness_includes_unresolved_live_order_ledger(tmp_path):
         "uncertain-live-order requires reconciliation" in reason
         for reason in result.reasons
     )
+
+
+
+def test_readiness_rejects_unhealthy_durable_persistence(tmp_path):
+    service, now = make_service(tmp_path)
+    service.persistence_health_provider = lambda: False
+    result = service.evaluate(now=now)
+    assert not result.ready
+    assert any("persistence health" in reason.lower() for reason in result.reasons)
+
+
+def test_readiness_rejects_unconfirmed_live_execution_prerequisites(tmp_path):
+    service, now = make_service(tmp_path)
+    service.execution_readiness_provider = lambda: False
+    result = service.evaluate(now=now)
+    assert not result.ready
+    assert any("execution prerequisites" in reason.lower() for reason in result.reasons)
+
+
+def test_readiness_rejects_missing_persistence_and_execution_providers(tmp_path):
+    service, now = make_service(tmp_path)
+    service.persistence_health_provider = None
+    service.execution_readiness_provider = None
+    result = service.evaluate(now=now)
+    assert not result.ready
+    assert any("persistence health provider" in reason.lower() for reason in result.reasons)
+    assert any("execution readiness provider" in reason.lower() for reason in result.reasons)
