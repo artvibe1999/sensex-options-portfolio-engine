@@ -216,8 +216,8 @@ def build_application_from_settings(
     failure installs a provider that denies both readiness flags.
     """
     store = SqliteStore(_sqlite_database_path(settings.database_url))
-    from .order_lifecycle import OrderLifecycle
     from .accounting import PortfolioAccountingService
+    from .order_lifecycle import OrderLifecycle
     from .portfolio_queries import PortfolioQueryService
     from .position_lifecycle import PositionLifecycle
 
