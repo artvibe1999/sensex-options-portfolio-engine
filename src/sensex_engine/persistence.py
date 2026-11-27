@@ -183,10 +183,16 @@ class SqliteStore:
                 "WHERE idempotency_key = ?", (idempotency_key,)
             ).fetchone()
             if duplicate is not None:
+                existing_payload = json.loads(duplicate["payload_json"])
+                incoming_payload = dict(payload)
+                if event_type == "POSITION_LEG_FILL_RECORDED":
+                    existing_payload.pop("status", None)
                 if (duplicate["event_type"] != event_type
                     or duplicate["aggregate_id"] != aggregate_id
-                    or duplicate["payload_json"] != encoded):
-                    raise ValueError("Position event idempotency key conflicts with existing event")
+                    or existing_payload != incoming_payload):
+                    raise ValueError(
+                        "Position event idempotency key conflicts with existing event"
+                    )
                 connection.commit()
                 return False
             rows = connection.execute(
@@ -234,7 +240,14 @@ class SqliteStore:
                             f"Invalid position transition: {status} -> {target}"
                         )
                 elif event_type == "POSITION_LEG_FILL_RECORDED":
-                    if fill_phase not in {"OPEN", "CLOSE"} or leg_index not in legs or fill_quantity <= 0:
+                    if (
+                        fill_phase not in {"OPEN", "CLOSE"}
+                        or payload.get("phase") != fill_phase
+                        or payload.get("leg_index") != leg_index
+                        or payload.get("quantity") != fill_quantity
+                        or leg_index not in legs
+                        or fill_quantity <= 0
+                    ):
                         raise ValueError("Invalid position leg fill parameters")
                     if fill_phase == "OPEN" and status != "PENDING":
                         raise ValueError(
