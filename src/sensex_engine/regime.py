@@ -52,7 +52,7 @@ def _atr_and_adx(candles: list[Candle], period: int = 14) -> tuple[list[float], 
     true_ranges: list[float] = []
     plus_dm: list[float] = []
     minus_dm: list[float] = []
-    for previous, current in zip(candles, candles[1:]):
+    for previous, current in zip(candles, candles[1:], strict=False):
         high_move = float(current.high - previous.high)
         low_move = float(previous.low - current.low)
         true_ranges.append(max(
@@ -100,7 +100,7 @@ def classify_regime(
     if len(candles) < minimum_bars or minimum_bars < 30:
         raise ValueError("Insufficient closed candles for regime analysis")
     timestamps = [candle.timestamp for candle in candles]
-    if any(left >= right for left, right in zip(timestamps, timestamps[1:])):
+    if any(left >= right for left, right in zip(timestamps, timestamps[1:], strict=False)):
         raise ValueError("Candles must be strictly chronological without duplicates")
     age = (as_of - timestamps[-1]).total_seconds()
     if age < -1 or age > max_last_bar_age_seconds:
@@ -123,8 +123,15 @@ def classify_regime(
 
     if expansion >= 1.5:
         regime = Regime.VOLATILITY_EXPANSION
-        bias = "bullish" if normalized_gap > 0 else "bearish" if normalized_gap < 0 else "neutral"
-        rationale = "ATR is at least 1.5x its recent median; directional trades require separate confirmation"
+        bias = (
+            "bullish" if normalized_gap > 0
+            else "bearish" if normalized_gap < 0
+            else "neutral"
+        )
+        rationale = (
+            "ATR is at least 1.5x its recent median; directional trades "
+            "require separate confirmation"
+        )
     elif adx >= 20 and normalized_gap >= 0.15 and slope > 0.02:
         regime, bias = Regime.BULL_TREND, "bullish"
         rationale = "ADX, fast/slow EMA separation and fast EMA slope confirm bullish trend"
