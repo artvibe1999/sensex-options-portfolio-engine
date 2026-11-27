@@ -181,7 +181,9 @@ def build_option_chain(
             or quote.ask % contract.tick_size != ZERO
         ):
             rejected.append(
-                RejectedContract(contract.instrument_token, "Quote prices violate contract tick size")
+                RejectedContract(
+                    contract.instrument_token, "Quote prices violate contract tick size"
+                )
             )
             continue
         expiry = _expiry_close(contract.expiry)
