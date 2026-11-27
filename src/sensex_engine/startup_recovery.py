@@ -21,7 +21,7 @@ IST = ZoneInfo("Asia/Kolkata")
 
 @dataclass(frozen=True)
 class StartupRecoveryResult:
-    ready: bool
+    recovery_complete: bool
     recovered_receipts: int
     backfilled_fills: int
     reconciliation: ReconciliationReport | None
@@ -31,9 +31,10 @@ class StartupRecoveryResult:
 class KiteStartupRecoveryService:
     """Recover local receipts and today's Kite fills before reconciling exposure.
 
-    The caller must invoke this service during startup and keep entries disabled
-    unless the returned result is ready. This is an orchestration primitive, not
-    a background scheduler and not a live-order execution service.
+    The caller must invoke this service during startup. A completed reconciliation
+    is only one startup gate: it is not live readiness or permission to resume entries.
+    The full LiveReadinessService and Telegram confirmation gates must still pass.
+    This is an orchestration primitive, not a scheduler or execution service.
     """
 
     def __init__(
@@ -72,7 +73,7 @@ class KiteStartupRecoveryService:
             contracts = self._contracts_provider()
             if not isinstance(contracts, list) or not contracts:
                 return StartupRecoveryResult(
-                    ready=False,
+                    recovery_complete=False,
                     recovered_receipts=recovered_receipts,
                     backfilled_fills=backfilled_fills,
                     reconciliation=None,
@@ -85,7 +86,7 @@ class KiteStartupRecoveryService:
                 order_lifecycle=self._orders,
             )
             return StartupRecoveryResult(
-                ready=report.reconciled,
+                recovery_complete=report.reconciled,
                 recovered_receipts=recovered_receipts,
                 backfilled_fills=backfilled_fills,
                 reconciliation=report,
@@ -95,7 +96,7 @@ class KiteStartupRecoveryService:
             )
         except Exception as exc:
             return StartupRecoveryResult(
-                ready=False,
+                recovery_complete=False,
                 recovered_receipts=recovered_receipts,
                 backfilled_fills=backfilled_fills,
                 reconciliation=None,
