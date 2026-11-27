@@ -16,7 +16,6 @@ IST = ZoneInfo("Asia/Kolkata")
 class KiteReadOnlyAdapter:
     def __init__(self, client: Any) -> None:
         self._client = client
-        self._contracts_by_token: dict[int, Contract] = {}
         self._symbols_by_token: dict[int, str] = {}
 
     @classmethod
@@ -67,7 +66,6 @@ class KiteReadOnlyAdapter:
                 tick_size=Decimal(str(row["tick_size"])),
             )
             contracts.append(contract)
-            self._contracts_by_token[token] = contract
             self._symbols_by_token[token] = f"BFO:{contract.tradingsymbol}"
         return contracts
 
@@ -82,7 +80,7 @@ class KiteReadOnlyAdapter:
         )
         result: dict[int, Quote] = {}
         for token in instrument_tokens:
-            contract = self._contracts_by_token[token]
+            self._symbols_by_token[token]
             raw = raw_quotes.get(self._symbols_by_token[token])
             if not raw:
                 continue
