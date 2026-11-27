@@ -80,7 +80,8 @@ async def dispatch_command(
         response, outcome = "Command rejected: user or chat is not authorized.", "DENIED"
     except NotImplementedError:
         response, outcome = (
-            "This command is not enabled yet; broker reconciliation and position services are pending.",
+            "This command is not enabled yet; broker reconciliation and "
+            "position services are pending.",
             "NOT_IMPLEMENTED",
         )
     except (RuntimeError, ValueError) as exc:
