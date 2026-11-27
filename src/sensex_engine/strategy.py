@@ -26,17 +26,24 @@ def _vertical(
         or long_contract.strike == short_contract.strike
     ):
         return None
+    long_time, short_time = long_leg.quote.timestamp, short_leg.quote.timestamp
+    if long_time.tzinfo is None or short_time.tzinfo is None:
+        return None
+    quote_skew = abs((long_time - short_time).total_seconds())
+    if quote_skew > 2:
+        return None
     legs = (
         OptionLeg(long_contract, Side.BUY, lots),
         OptionLeg(short_contract, Side.SELL, lots),
     )
+    # Use executable-side prices rather than midpoint marks.
     costs = costs_per_lot * lots
     try:
         payoff = calculate_expiry_payoff(
             legs,
             {
-                long_contract.instrument_token: long_leg.mid_price,
-                short_contract.instrument_token: short_leg.mid_price,
+                long_contract.instrument_token: long_leg.quote.ask,
+                short_contract.instrument_token: short_leg.quote.bid,
             },
             estimated_costs=costs,
         )
@@ -55,7 +62,7 @@ def _vertical(
         max_profit=payoff.max_profit,
         net_debit=payoff.net_debit,
         estimated_costs=costs,
-        data_timestamp=long_leg.quote.timestamp,
+        data_timestamp=min(long_time, short_time),
         is_defined_risk=True,
         rationale=rationale,
     )
