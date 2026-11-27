@@ -61,7 +61,10 @@ class BrokerFillIngestionService:
         if claim is None:
             receipt = store.broker_fill_receipt(event_key)
             if receipt is not None and receipt["status"] == "PROCESSED":
-                return FillIngestionResult(**receipt["result"])
+                prior = dict(receipt["result"])
+                prior["order_event_created"] = False
+                prior["position_event_created"] = False
+                return FillIngestionResult(**prior)
             raise RuntimeError("Broker fill receipt is already being processed")
         try:
             result = self._apply(event)
