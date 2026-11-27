@@ -48,7 +48,7 @@ class PortfolioAccountingService:
             if event["event_type"] != event_type or event["payload"] != payload:
                 raise ValueError("Account ledger idempotency key conflicts with an existing event")
             return False
-        return self.store.append_event(
+        return self.store.append_account_event(
             idempotency_key=f"account:{key}",
             event_type=event_type,
             aggregate_id=ACCOUNT_ID,
