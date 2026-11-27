@@ -178,3 +178,16 @@ includes canceled/rejected terminal intents so late fills after cancellation are
 lost. It excludes paper intents, uncorrelated intents and prior-session orders.
 The caller must supply the session date and schedule repeated calls; this helper is
 not itself a scheduler and does not replace asynchronous Kite postbacks/websockets.
+
+
+## Ordered Kite startup recovery
+
+`KiteStartupRecoveryService` provides an explicit startup orchestration primitive:
+(1) replay durable pending fill-inbox receipts, (2) backfill all correlated LIVE
+orders created during the current IST session using Kite per-order trade history,
+and (3) reconcile durable positions and orders against read-only broker state.
+It refuses non-current session dates, stops before broker polling if local receipt
+replay fails, and returns ready only when the final broker reconciliation passes.
+The caller must keep entries paused unless `StartupRecoveryResult.ready` is true.
+This service does not schedule itself, enable live mode, or submit/cancel orders;
+runtime wiring, recurring polling, and operational supervision remain required.
