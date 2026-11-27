@@ -98,3 +98,48 @@ def test_order_intent_validates_identity_and_quantity(tmp_path):
             tradingsymbol="SENSEX_TEST", side="SELL", quantity=0,
             order_type="LIMIT", product="NRML", mode="paper", idempotency_key="x",
         )
+
+
+def test_replayed_older_fill_remains_idempotent_after_later_fill(tmp_path):
+    ledger = make_ledger(tmp_path)
+    for state, update_id in (
+        (OrderState.VALIDATED, "v1"),
+        (OrderState.SUBMITTING, "s1"),
+        (OrderState.ACKNOWLEDGED, "a1"),
+    ):
+        ledger.transition(order_id="internal-1", new_state=state, update_id=update_id)
+    first = {
+        "order_id": "internal-1", "fill_id": "fill-1", "quantity": 5,
+        "price": Decimal("100"), "filled_at": "2026-11-27T10:00:00+05:30",
+    }
+    assert ledger.record_fill(**first)
+    assert ledger.record_fill(
+        order_id="internal-1", fill_id="fill-2", quantity=5,
+        price=Decimal("102"), filled_at="2026-11-27T10:00:01+05:30",
+    )
+    assert not ledger.record_fill(**first)
+    snapshot = ledger.snapshot("internal-1")
+    assert snapshot["filled_quantity"] == 10
+    assert snapshot["average_fill_price"] == "101"
+
+
+def test_fill_idempotency_key_reuse_with_different_data_is_rejected(tmp_path):
+    ledger = make_ledger(tmp_path)
+    ledger.transition(
+        order_id="internal-1", new_state=OrderState.VALIDATED, update_id="v1"
+    )
+    ledger.transition(
+        order_id="internal-1", new_state=OrderState.SUBMITTING, update_id="s1"
+    )
+    ledger.transition(
+        order_id="internal-1", new_state=OrderState.ACKNOWLEDGED, update_id="a1"
+    )
+    ledger.record_fill(
+        order_id="internal-1", fill_id="fill-1", quantity=4,
+        price=Decimal("100"), filled_at="2026-11-27T10:00:00+05:30",
+    )
+    with pytest.raises(ValueError, match="conflicts"):
+        ledger.record_fill(
+            order_id="internal-1", fill_id="fill-1", quantity=4,
+            price=Decimal("101"), filled_at="2026-11-27T10:00:00+05:30",
+        )
