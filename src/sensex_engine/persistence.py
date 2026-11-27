@@ -89,6 +89,75 @@ class SqliteStore:
             )
             return cursor.rowcount == 1
 
+
+    def append_order_event(
+        self,
+        *,
+        idempotency_key: str,
+        event_type: str,
+        aggregate_id: str,
+        payload: dict[str, Any],
+        expected_state: str | None = None,
+        max_quantity: int | None = None,
+        fill_quantity: int = 0,
+    ) -> bool:
+        """Atomically validate and append an order event across all store instances."""
+        if not idempotency_key.strip() or not event_type.strip() or not aggregate_id.strip():
+            raise ValueError("Event identity fields are required")
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            duplicate = connection.execute(
+                "SELECT event_type, aggregate_id, payload_json FROM portfolio_events "
+                "WHERE idempotency_key = ?", (idempotency_key,)
+            ).fetchone()
+            if duplicate is not None:
+                if (duplicate["event_type"] != event_type
+                    or duplicate["aggregate_id"] != aggregate_id
+                    or duplicate["payload_json"] != encoded):
+                    raise ValueError("Order event idempotency key conflicts with existing event")
+                connection.commit()
+                return False
+            rows = connection.execute(
+                "SELECT event_type, payload_json FROM portfolio_events "
+                "WHERE aggregate_id = ? ORDER BY event_id", (aggregate_id,)
+            ).fetchall()
+            if event_type == "ORDER_INTENT_CREATED":
+                if rows:
+                    raise ValueError("Order intent already exists")
+            else:
+                if not rows or rows[0]["event_type"] != "ORDER_INTENT_CREATED":
+                    raise ValueError("Unknown order intent")
+                current_state = rows[0] and json.loads(rows[0]["payload_json"])["state"]
+                filled = 0
+                for row in rows[1:]:
+                    prior = json.loads(row["payload_json"])
+                    if row["event_type"] in {"ORDER_STATE_CHANGED", "ORDER_FILL_RECORDED"}:
+                        current_state = prior["state"]
+                    if row["event_type"] == "ORDER_FILL_RECORDED":
+                        filled += int(prior["quantity"])
+                if expected_state is not None and current_state != expected_state:
+                    raise RuntimeError("Order state changed concurrently; reload before retrying")
+                if fill_quantity:
+                    if current_state in {"FILLED", "CANCELLED", "REJECTED", "EXPIRED"}:
+                        raise ValueError("Cannot add a fill to a terminal order")
+                    if max_quantity is None or filled + fill_quantity > max_quantity:
+                        raise ValueError("Cumulative fills exceed requested order quantity")
+            connection.execute(
+                "INSERT INTO portfolio_events "
+                "(idempotency_key, event_type, aggregate_id, payload_json, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (idempotency_key, event_type, aggregate_id, encoded, datetime.now(UTC).isoformat()),
+            )
+            connection.commit()
+            return True
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+
     def record_command(
         self,
         *,
