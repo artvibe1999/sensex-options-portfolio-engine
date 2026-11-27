@@ -12,7 +12,7 @@ from typing import Any
 
 from .capital import adaptive_risk_budget, affordable_lots
 from .domain import PortfolioSnapshot
-from .reconciliation import ReconciliationReport
+from .reconciliation import BrokerReconciliationService, ReconciliationReport
 
 ACCOUNT_ID = "account:default"
 
@@ -167,6 +167,51 @@ class PortfolioAccountingService:
             "broker_positions_hash": positions_hash,
             "marked_at": timestamp.astimezone(UTC).isoformat(),
         })
+
+    def reconcile_and_record_mark(
+        self,
+        *,
+        broker: Any,
+        contracts: list[Any],
+        position_lifecycle: Any,
+        order_lifecycle: Any,
+        broker_net_equity: Decimal,
+        unrealized_pnl: Decimal,
+        available_margin: Decimal,
+        open_max_loss: Decimal,
+        open_positions: int,
+        entries_today: int,
+        reconciliation_id: str,
+        marked_at: datetime | None = None,
+    ) -> ReconciliationReport:
+        """Read broker state, reconcile actual fills/orders, then persist a mark.
+
+        A mismatch or unresolved order raises and no equity mark is written.
+        Equity and open-risk values must come from independent authoritative
+        account/payoff providers; Kite margin alone is not net liquidation equity.
+        """
+        report = BrokerReconciliationService().reconcile_store(
+            broker,
+            contracts=contracts,
+            position_lifecycle=position_lifecycle,
+            order_lifecycle=order_lifecycle,
+        )
+        if not report.reconciled:
+            raise RuntimeError(
+                "Broker reconciliation failed: " + "; ".join(report.mismatches)
+            )
+        self.record_reconciled_mark(
+            broker_net_equity=broker_net_equity,
+            unrealized_pnl=unrealized_pnl,
+            available_margin=available_margin,
+            open_max_loss=open_max_loss,
+            open_positions=open_positions,
+            entries_today=entries_today,
+            reconciliation_id=reconciliation_id,
+            reconciliation_report=report,
+            marked_at=marked_at,
+        )
+        return report
 
     def snapshot(self, *, now: datetime | None = None, max_mark_age: timedelta = timedelta(minutes=2)) -> PortfolioSnapshot | None:
         events = self._events()
