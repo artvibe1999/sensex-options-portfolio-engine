@@ -40,6 +40,7 @@ def validate_quote(
     max_age_seconds: int = 5,
     max_spread_pct: Decimal = Decimal("0.03"),
     min_top_depth: int = 1,
+    min_volume: int = 1,
 ) -> QuoteQuality:
     if now.tzinfo is None or quote.timestamp.tzinfo is None:
         return QuoteQuality(False, "Timezone-aware timestamps are required", Decimal("0"))
@@ -54,4 +55,6 @@ def validate_quote(
         return QuoteQuality(False, "Bid-ask spread exceeds liquidity threshold", spread_pct)
     if min(quote.bid_quantity, quote.ask_quantity) < min_top_depth:
         return QuoteQuality(False, "Insufficient top-of-book depth", spread_pct)
+    if quote.volume < min_volume:
+        return QuoteQuality(False, "Insufficient traded volume", spread_pct)
     return QuoteQuality(True, "Quote passes freshness and liquidity checks", spread_pct)
