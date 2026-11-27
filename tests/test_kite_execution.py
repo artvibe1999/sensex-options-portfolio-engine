@@ -158,6 +158,10 @@ def test_submit_does_not_place_again_when_exact_existing_order_is_found():
         "exchange": "BFO",
         "tradingsymbol": action.tradingsymbol,
         "transaction_type": "BUY",
+        "order_type": "LIMIT",
+        "product": "NRML",
+        "variety": "regular",
+        "price": 100.05,
         "quantity": 40,
     }]
     receipt = adapter.submit_order(action, client_order_key="same-key")
@@ -176,6 +180,10 @@ def test_tag_collision_with_different_order_fields_fails_closed():
         "exchange": "BFO",
         "tradingsymbol": action.tradingsymbol,
         "transaction_type": "SELL",
+        "order_type": "LIMIT",
+        "product": "NRML",
+        "variety": "regular",
+        "price": 100.05,
         "quantity": 40,
     }]
     with pytest.raises(RuntimeError, match="different order"):
