@@ -1,5 +1,6 @@
 """Read-only reconciliation of internal multi-leg exposure against broker state."""
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from .broker import BrokerPort
@@ -76,12 +77,20 @@ def reconcile_snapshots(
             quantity_value = row.get("quantity", 0)
             if isinstance(quantity_value, bool):
                 raise ValueError
-            quantity = int(quantity_value)
-        except (TypeError, ValueError):
+            quantity_decimal = Decimal(str(quantity_value))
+            if (
+                not quantity_decimal.is_finite()
+                or quantity_decimal != quantity_decimal.to_integral_value()
+            ):
+                raise ValueError
+            quantity = int(quantity_decimal)
+        except (InvalidOperation, TypeError, ValueError):
             issues.append("Broker position has an invalid net quantity")
             continue
         token_value = row.get("instrument_token")
         try:
+            if isinstance(token_value, bool):
+                raise ValueError
             token = int(token_value) if token_value is not None else None
         except (TypeError, ValueError):
             token = None
