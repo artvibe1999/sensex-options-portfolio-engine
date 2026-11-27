@@ -191,6 +191,22 @@ class DurableBrokerSubmissionService:
                 snapshot, False, "Broker lookup failed; do not resubmit"
             )
 
+        if not isinstance(matches, tuple) or any(
+            not self._valid_receipt(item) for item in matches
+        ):
+            if state is not OrderState.RECOVERY_REQUIRED:
+                self._lifecycle.transition(
+                    order_id=order_id,
+                    new_state=OrderState.RECOVERY_REQUIRED,
+                    update_id=f"malformed-lookup:{client_key}",
+                    message="Malformed broker lookup response",
+                )
+            current = self._lifecycle.snapshot(order_id) or snapshot
+            return self._outcome(
+                current, False,
+                "Malformed broker lookup response; keep blocked for manual reconciliation",
+            )
+
         if len(matches) != 1:
             target = (
                 OrderState.RECOVERY_REQUIRED
