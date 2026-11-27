@@ -1,6 +1,7 @@
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
+from sensex_engine.order_lifecycle import OrderLifecycle
 from sensex_engine.persistence import SqliteStore
 from sensex_engine.position_lifecycle import PositionLifecycle
 from sensex_engine.readiness import LiveReadinessService
@@ -78,3 +79,34 @@ def test_readiness_rejects_naive_evaluation_time(tmp_path):
         assert "timezone-aware" in str(exc)
     else:
         raise AssertionError("naive evaluation time must be rejected")
+
+
+def test_readiness_includes_unresolved_live_order_ledger(tmp_path):
+    now = datetime.now(UTC)
+    store = SqliteStore(tmp_path / "readiness-live-order.sqlite3")
+    positions = PositionLifecycle(store)
+    orders = OrderLifecycle(store)
+    orders.create_intent(
+        order_id="uncertain-live-order", position_id="position-1",
+        leg_index=0, instrument_token=1, tradingsymbol="SENSEX80000CE",
+        side="BUY", quantity=20, order_type="LIMIT", product="MIS",
+        mode="live", idempotency_key="uncertain-live-order-create",
+    )
+    contract = SimpleNamespace(
+        instrument_token=1, tradingsymbol="SENSEX80000CE", lot_size=1
+    )
+    service = LiveReadinessService(
+        broker=FakeBroker(),
+        position_lifecycle=positions,
+        order_lifecycle=orders,
+        contracts_provider=lambda: ([contract], now),
+        market_data_timestamp_provider=lambda: now,
+        risk_clearance_provider=lambda: True,
+    )
+    result = service.evaluate(now=now)
+    assert not result.ready
+    assert not result.broker_ready
+    assert any(
+        "uncertain-live-order requires reconciliation" in reason
+        for reason in result.reasons
+    )
