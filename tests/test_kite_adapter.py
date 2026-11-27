@@ -123,3 +123,23 @@ def test_kite_adapter_skips_malformed_quote_timestamps():
     adapter = KiteReadOnlyAdapter(fake)
     adapter.instruments()
     assert adapter.quotes([987]) == {}
+
+
+def test_kite_adapter_exposes_read_only_per_order_trade_history():
+    class WithTrades(FakeKite):
+        def __init__(self):
+            super().__init__()
+            self.trade_order_ids = []
+
+        def order_trades(self, order_id):
+            self.trade_order_ids.append(order_id)
+            return [{"trade_id": "t1", "order_id": order_id}]
+
+    fake = WithTrades()
+    adapter = KiteReadOnlyAdapter(fake)
+    assert adapter.order_trades("kite-1") == [
+        {"trade_id": "t1", "order_id": "kite-1"}
+    ]
+    assert fake.trade_order_ids == ["kite-1"]
+    with pytest.raises(ValueError):
+        adapter.order_trades("")
