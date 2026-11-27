@@ -291,4 +291,4 @@ class KiteOrderExecutionAdapter:
             wait = cls._minimum_order_interval - (now - cls._last_order_call)
             if wait > 0:
                 sleep(wait)
-            cls._last_order_call = time.monotonic()
+            cls._last_order_call = monotonic()
