@@ -122,3 +122,17 @@ class KiteReadOnlyAdapter:
 
     def orders(self) -> list[dict[str, Any]]:
         return self._client.orders()
+
+
+    def order_trades(self, broker_order_id: str) -> list[dict[str, Any]]:
+        """Return individual executions for one current-session broker order.
+
+        Kite's order/trade history is transient and should be backfilled into the
+        local durable fill inbox during the trading session.
+        """
+        if not isinstance(broker_order_id, str) or not broker_order_id.strip():
+            raise ValueError("Broker order ID is required")
+        rows = self._client.order_trades(broker_order_id)
+        if not isinstance(rows, list):
+            raise ValueError("Kite order_trades response must be a list")
+        return rows
