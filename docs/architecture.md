@@ -31,6 +31,20 @@ zero or multiple matches remain blocked, and exactly one match is correlated wit
 treating acknowledgement as a fill. Fill events must still be independently persisted
 before the multi-leg coordinator may advance.
 
+A broker-fill ingestion boundary now resolves each broker order ID against
+all durable internal order snapshots (including cancelled orders, to allow late
+fills). It verifies instrument token, trading symbol and side before forwarding
+the event to the fill coordinator. Broker trade IDs are namespaced by broker order
+ID for idempotency. Duplicate events are harmless; unknown or ambiguous order IDs,
+contract mismatches, malformed fills, and fills that exceed the remaining order or
+position quantity are rejected. Partial close intents may be smaller than the
+original planned leg, but cannot exceed confirmed remaining exposure.
+
+This is an adapter-neutral ingestion boundary only. It does not connect to Kite
+websocket/order updates, poll trade history, establish event delivery guarantees,
+or prove that broker trade IDs and timestamps are normalized correctly. Operational
+reconciliation and durable retry of unprocessed inbound events remain required.
+
 Live submission is disabled by default, and no Kite order-placement adapter or
 runtime wiring exists. The injected broker port must provide reliable exact-key
 lookup; this contract has not yet been validated against Kite's actual order-tag
