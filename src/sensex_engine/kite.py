@@ -52,7 +52,11 @@ class KiteReadOnlyAdapter:
                 continue
             expiry_value = row.get("expiry")
             if isinstance(expiry_value, datetime):
-                expiry = expiry_value.astimezone(IST)
+                expiry = (
+                    expiry_value.replace(tzinfo=IST)
+                    if expiry_value.tzinfo is None
+                    else expiry_value.astimezone(IST)
+                )
             elif isinstance(expiry_value, date):
                 expiry = datetime.combine(expiry_value, time.min, tzinfo=IST)
             else:
@@ -90,6 +94,13 @@ class KiteReadOnlyAdapter:
             sell = (depth.get("sell") or [{}])[0]
             timestamp = raw.get("timestamp") or raw.get("last_trade_time")
             if timestamp is None:
+                continue
+            if isinstance(timestamp, str):
+                try:
+                    timestamp = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+                except ValueError:
+                    continue
+            if not isinstance(timestamp, datetime):
                 continue
             if timestamp.tzinfo is None:
                 timestamp = timestamp.replace(tzinfo=IST)
