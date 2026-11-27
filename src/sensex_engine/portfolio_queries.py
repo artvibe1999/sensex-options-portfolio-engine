@@ -34,24 +34,43 @@ class PortfolioQueryService:
 
     def _accounting_text(self, view: str) -> str:
         if self.accounting is None:
-            return "Authoritative account accounting is not configured; values are unavailable and LIVE readiness remains blocked."
+            return (
+                "Authoritative account accounting is not configured; values are unavailable "
+                "and LIVE readiness remains blocked."
+            )
         try:
             report = self.accounting.report()
         except Exception:
-            return "Account ledger could not be read safely; values are unavailable and LIVE readiness remains blocked."
+            return (
+                "Account ledger could not be read safely; values are unavailable "
+                "and LIVE readiness remains blocked."
+            )
         if report is None:
-            return "Account equity is unavailable: opening balance or a fresh reconciled broker mark is missing, stale, or mismatched. LIVE readiness remains blocked."
+            return (
+                "Account equity is unavailable: opening balance or a fresh reconciled broker "
+                "mark is missing, stale, or mismatched. LIVE readiness remains blocked."
+            )
         if view == "pnl":
-            keys = ("realized_net_pnl", "fees_and_taxes", "unrealized_pnl", "net_liquidation_equity")
+            keys = (
+                "realized_net_pnl", "fees_and_taxes", "unrealized_pnl",
+                "net_liquidation_equity",
+            )
         elif view == "capital":
-            keys = ("opening_equity", "deposits", "withdrawals", "cash_balance", "net_liquidation_equity", "available_margin")
+            keys = (
+                "opening_equity", "deposits", "withdrawals", "cash_balance",
+                "net_liquidation_equity", "available_margin",
+            )
         else:
-            keys = ("open_max_loss", "weekly_drawdown_pct", "monthly_drawdown_pct", "open_positions", "entries_today")
+            keys = (
+                "open_max_loss", "weekly_drawdown_pct", "monthly_drawdown_pct",
+                "open_positions", "entries_today",
+            )
         labels = {
             "realized_net_pnl": "Realised net P&L", "fees_and_taxes": "Fees and taxes",
             "cash_balance": "Cash balance", "unrealized_pnl": "Unrealised P&L",
             "net_liquidation_equity": "Net liquidation equity", "opening_equity": "Opening equity",
-            "deposits": "Deposits", "withdrawals": "Withdrawals", "available_margin": "Available margin",
+            "deposits": "Deposits", "withdrawals": "Withdrawals",
+            "available_margin": "Available margin",
             "open_max_loss": "Open defined max loss", "weekly_drawdown_pct": "Weekly drawdown %",
             "monthly_drawdown_pct": "Monthly drawdown %", "open_positions": "Open positions",
             "entries_today": "Entries today",
