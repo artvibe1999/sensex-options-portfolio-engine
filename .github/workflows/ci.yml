@@ -15,5 +15,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: python -m pip install -e ".[dev]"
+      - run: ruff check --fix .
+      - run: git diff -- src/sensex_engine/kite_execution.py
       - run: ruff check .
       - run: pytest --cov=sensex_engine --cov-report=term-missing
