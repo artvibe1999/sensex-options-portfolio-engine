@@ -213,3 +213,40 @@ def test_kite_trade_history_requires_explicit_current_session_order_ids(tmp_path
     assert client.calls == []
     with pytest.raises(ValueError, match="Unknown internal"):
         transport.poll(["not-an-order"])
+
+
+def test_current_session_backfill_includes_cancelled_live_orders_for_late_fills(tmp_path):
+    orders, positions, ingestion = setup_live(tmp_path)
+    orders.transition(
+        order_id="internal-live-order",
+        new_state=OrderState.CANCELLED,
+        update_id="cancel-ack",
+    )
+    snapshot = orders.snapshot("internal-live-order")
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    session_date = datetime.fromisoformat(
+        snapshot["created_at"].replace("Z", "+00:00")
+    ).astimezone(ZoneInfo("Asia/Kolkata")).date()
+    client = FakeKiteTrades([trade()])
+    transport = KiteTradeHistoryIngestor(
+        client=client, orders=orders, positions=positions, ingestion=ingestion
+    )
+
+    results = transport.poll_current_session(session_date=session_date)
+
+    assert len(results) == 1
+    assert results[0].broker_trade_id == "trade-1"
+    assert orders.snapshot("internal-live-order")["filled_quantity"] == 10
+    assert positions.snapshot("position-live")["legs"][0]["opened_quantity"] == 10
+
+
+def test_current_session_backfill_requires_explicit_date(tmp_path):
+    orders, positions, ingestion = setup_live(tmp_path)
+    transport = KiteTradeHistoryIngestor(
+        client=FakeKiteTrades(), orders=orders, positions=positions, ingestion=ingestion
+    )
+
+    with pytest.raises(ValueError, match="explicit calendar date"):
+        transport.poll_current_session(session_date="2026-11-27")
