@@ -245,3 +245,60 @@ def test_broker_order_id_cannot_change_after_correlation(tmp_path):
             order_id="internal-1", new_state=OrderState.UNKNOWN,
             update_id="u1", broker_order_id="kite-order-456",
         )
+
+
+def test_late_broker_fill_after_cancel_ack_is_recorded_safely(tmp_path):
+    ledger = make_ledger(tmp_path)
+    for state, update_id in (
+        (OrderState.VALIDATED, "v1"),
+        (OrderState.SUBMITTING, "s1"),
+        (OrderState.ACKNOWLEDGED, "a1"),
+        (OrderState.OPEN, "o1"),
+        (OrderState.CANCEL_PENDING, "cp1"),
+        (OrderState.CANCELLED, "c1"),
+    ):
+        ledger.transition(
+            order_id="internal-1", new_state=state, update_id=update_id
+        )
+    # A fill can be reported after the cancel acknowledgement due to event
+    # delivery ordering. It must update exposure rather than be silently lost.
+    assert ledger.record_fill(
+        order_id="internal-1", fill_id="late-fill-1", quantity=8,
+        price=Decimal("100.50"), filled_at="2026-11-27T10:00:02+05:30",
+    )
+    snapshot = ledger.snapshot("internal-1")
+    assert snapshot["state"] == "PARTIALLY_FILLED"
+    assert snapshot["filled_quantity"] == 8
+    assert snapshot["remaining_quantity"] == 12
+
+
+def test_late_fill_after_cancel_can_complete_but_never_overfill(tmp_path):
+    ledger = make_ledger(tmp_path)
+    for state, update_id in (
+        (OrderState.VALIDATED, "v1"),
+        (OrderState.SUBMITTING, "s1"),
+        (OrderState.ACKNOWLEDGED, "a1"),
+        (OrderState.OPEN, "o1"),
+        (OrderState.CANCEL_PENDING, "cp1"),
+        (OrderState.CANCELLED, "c1"),
+    ):
+        ledger.transition(
+            order_id="internal-1", new_state=state, update_id=update_id
+        )
+    assert ledger.record_fill(
+        order_id="internal-1", fill_id="late-fill-1", quantity=8,
+        price=Decimal("100"), filled_at="2026-11-27T10:00:02+05:30",
+    )
+    assert ledger.record_fill(
+        order_id="internal-1", fill_id="late-fill-2", quantity=12,
+        price=Decimal("101"), filled_at="2026-11-27T10:00:03+05:30",
+    )
+    snapshot = ledger.snapshot("internal-1")
+    assert snapshot["state"] == "FILLED"
+    assert snapshot["filled_quantity"] == 20
+    assert snapshot["remaining_quantity"] == 0
+    with pytest.raises(ValueError, match="terminal"):
+        ledger.record_fill(
+            order_id="internal-1", fill_id="late-fill-3", quantity=1,
+            price=Decimal("102"), filled_at="2026-11-27T10:00:04+05:30",
+        )
