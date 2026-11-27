@@ -62,15 +62,19 @@ class KiteStartupRecoveryService:
         if session_date != datetime.now(IST).date():
             raise ValueError("Startup recovery is restricted to the current IST session")
 
+        recovered_receipts = 0
+        backfilled_fills = 0
         try:
             receipts = self._fill_ingestion.recover_pending()
+            recovered_receipts = len(receipts)
             fills = self._trade_history.poll_current_session(session_date=session_date)
+            backfilled_fills = len(fills)
             contracts = self._contracts_provider()
             if not isinstance(contracts, list) or not contracts:
                 return StartupRecoveryResult(
                     ready=False,
-                    recovered_receipts=len(receipts),
-                    backfilled_fills=len(fills),
+                    recovered_receipts=recovered_receipts,
+                    backfilled_fills=backfilled_fills,
                     reconciliation=None,
                     reasons=("Current BFO contract master is unavailable or empty",),
                 )
@@ -82,8 +86,8 @@ class KiteStartupRecoveryService:
             )
             return StartupRecoveryResult(
                 ready=report.reconciled,
-                recovered_receipts=len(receipts),
-                backfilled_fills=len(fills),
+                recovered_receipts=recovered_receipts,
+                backfilled_fills=backfilled_fills,
                 reconciliation=report,
                 reasons=() if report.reconciled else (
                     report.mismatches or ("Broker reconciliation did not pass",)
@@ -92,8 +96,8 @@ class KiteStartupRecoveryService:
         except Exception as exc:
             return StartupRecoveryResult(
                 ready=False,
-                recovered_receipts=0,
-                backfilled_fills=0,
+                recovered_receipts=recovered_receipts,
+                backfilled_fills=backfilled_fills,
                 reconciliation=None,
                 reasons=(f"Startup recovery failed: {type(exc).__name__}",),
             )
