@@ -866,7 +866,6 @@ Implemented and covered by automated tests:
 - Read-only Telegram positions/orders views, Ruff and pytest CI.
 
 Partially implemented or not yet complete against this specification:
-- Kite event/postback or supervised recurring fill acquisition, reconnect handling, periodic reconciliation and missed-event recovery.
 - Actual Kite order-placement adapter, verified client-reference lookup semantics and end-to-end broker execution.
 - Durable fill-confirmed multi-leg live orchestration, including partial-fill/reject/timeout handling, cancel/replace and residual-exposure management.
 - Full live-readiness dependency wiring for fresh market data, contract master, broker health, persistence and portfolio risk; Telegram resume/live confirmation remain fail-closed without it.
@@ -878,7 +877,7 @@ Partially implemented or not yet complete against this specification:
 - Kite access-token generation/renewal and secure session lifecycle.
 - Structured production monitoring, alerting, runbooks, encrypted backup/restore drills, security review and end-to-end paper validation across all strategy families/regimes.
 
-The environment-backed Telegram entrypoint attempts read-only Kite startup recovery before polling when both Kite credentials are configured. Missing credentials or any recovery failure keep the startup gate closed. Credentials use masked secret settings and are unwrapped only at the adapter boundary. This startup check is not full live readiness and does not enable order placement.
+The environment-backed Telegram entrypoint attempts read-only Kite startup recovery before polling when both Kite credentials are configured. The Telegram lifecycle now starts a supervised recurring Kite monitor: it replays the durable inbox, backfills current-session individual trades, refreshes the BFO contract master and reconciles broker positions/orders on each cycle. It recreates the Kite adapter after failures, retries with bounded backoff, and uses an independent watchdog for stale data and worker death. Unhealthy state forces paper mode, pauses entries and closes the startup-recovery gate; health transitions are logged and alerted to allowlisted Telegram chats. Recovery never auto-resumes entries or restores live mode. Missing credentials leave recovery incomplete and generate an operator alert. Credentials use masked secret settings and are unwrapped only at the adapter boundary. This monitor is read-only and is not full live readiness; it does not enable order placement.
 
 The branch remains a development/paper foundation. It is not ready for live production deployment. No live trading, deployment, broker credential change or repository merge is authorized by this status update.
 ---
@@ -900,14 +899,15 @@ acceptance conditions are implemented, tested, and verified on the branch. A
 foundation, stub, plan, injectable interface, or paper-only simulation does not
 complete a live requirement. The count below counts IDs, not sub-bullets.
 
-**Register baseline: 17 pending items as of 2026-11-27, branch head
-54aaa739f865e15fcf20e0fb373a955d84d7f5f4.** All are in scope because they map
+**Register update: PE-01 completed on 2026-11-27, verified at commit
+f3d973462e3a15ef741c7f24ec2de7355827f0ab (push CI passed; PR CI pending at
+that point). The canonical register now has 16 pending items.** All are in scope because they map
 directly to requirements in sections 5–16. No additional feature may be added
 unless it is explicitly required by this document.
 
 | ID | Status | Requirement and completion condition |
 |---|---|---|
-| PE-01 | PARTIAL | **Supervised broker fill acquisition and reconciliation.** Add recurring current-session trade-history polling and/or supported Kite postback acquisition, supervised worker lifecycle, reconnect/retry handling, missed-event backfill, periodic reconciliation, health/alerting, and fail-closed behaviour on worker death or stale broker state. Verify idempotency and recovery under interruption. |
+| PE-01 | COMPLETE | **Supervised broker fill acquisition and reconciliation.** Recurring current-session Kite trade-history polling, supervised Telegram lifecycle, adapter recreation/retry, missed-event backfill through the durable inbox, periodic broker reconciliation, watchdog stale/worker-death detection, allowlisted Telegram alerts and fail-closed paper/pause behaviour are implemented and covered by CI at commit f3d973462e3a15ef741c7f24ec2de7355827f0ab. |
 | PE-02 | NOT STARTED | **Kite order-placement adapter.** Implement the required order placement/cancel/modify capabilities only after verifying current BSE/Kite constraints, stable client-reference/tag semantics, exact lookup, rate limits, and broker response validation. Keep live submission disabled by default. |
 | PE-03 | PARTIAL | **Durable live multi-leg execution and recovery.** Connect durable intent/submission/fill records to broker execution; gate every next leg on broker-confirmed fills; handle partial fills, rejects, timeouts, cancel/replace races, unknown outcomes and residual exposure without duplicate submissions. |
 | PE-04 | PARTIAL | **Complete live-readiness wiring.** Construct and inject real broker-authentication, contract-master, fresh market-data, persistence, reconciliation and portfolio-risk dependencies in the runtime. Every required gate must fail closed; startup recovery alone is insufficient. |
