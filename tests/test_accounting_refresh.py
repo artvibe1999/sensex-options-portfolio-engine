@@ -6,6 +6,8 @@ import pytest
 
 from sensex_engine.accounting import PortfolioAccountingService
 from sensex_engine.accounting_refresh import LiveAccountingRefresh, StatementFeed
+from sensex_engine.domain import Contract, Right
+from sensex_engine.market_data import Quote
 from sensex_engine.order_lifecycle import OrderLifecycle
 from sensex_engine.persistence import SqliteStore
 from sensex_engine.position_lifecycle import PositionLifecycle
@@ -78,3 +80,65 @@ def test_statement_rejects_margin_as_equity_source(tmp_path):
     source.write_text(json.dumps({"source": "kite_margins", "currency": "INR"}))
     with pytest.raises(ValueError, match="Independent"):
         StatementFeed(str(source)).read(datetime.now(UTC))
+
+
+def test_open_filled_risk_and_unrealized_pnl_from_executable_marks(tmp_path):
+    store = SqliteStore(tmp_path / "open-account.sqlite3")
+    account = PortfolioAccountingService(store=store)
+    positions = PositionLifecycle(store)
+    now = datetime.now(UTC)
+    expiry = now + timedelta(days=5)
+    contracts = [
+        Contract("A", 1, expiry, Decimal("80000"), Right.CE, 20, Decimal(".05")),
+        Contract("B", 2, expiry, Decimal("80100"), Right.CE, 20, Decimal(".05")),
+    ]
+    positions.create(
+        position_id="p", strategy_id="VERTICAL", mode="live", idempotency_key="p",
+        legs=[
+            dict(leg_index=0, instrument_token=1, tradingsymbol="A",
+                 side="BUY", quantity=20),
+            dict(leg_index=1, instrument_token=2, tradingsymbol="B",
+                 side="SELL", quantity=20),
+        ],
+    )
+    for index, price, fid in [(0, "100", "long"), (1, "60", "short")]:
+        positions.record_leg_fill(
+            position_id="p", leg_index=index, phase="OPEN", fill_id=fid,
+            quantity=20, price=Decimal(price), filled_at=now.isoformat(),
+        )
+
+    class OpenBroker(FlatBroker):
+        def instruments(self):
+            return contracts
+
+        def positions(self):
+            return {"net": [
+                {"exchange": "BFO", "instrument_token": 1, "quantity": 20},
+                {"exchange": "BFO", "instrument_token": 2, "quantity": -20},
+            ]}
+
+        def quotes(self, tokens):
+            return {
+                1: Quote(1, now, Decimal("110"), Decimal("110"), Decimal("111"), 50, 50, 500),
+                2: Quote(2, now, Decimal("65"), Decimal("64"), Decimal("65"), 50, 50, 500),
+            }
+
+    source = tmp_path / "statement.json"
+    source.write_text(json.dumps({
+        "source": "broker_account_statement", "currency": "INR",
+        "as_of": now.isoformat(), "statement_id": "open",
+        "opening_equity": "50000", "cash_flows": [],
+        "charges_by_fill": {"long": "10", "short": "15"},
+        "net_liquidation_equity": "50075", "cash_balance": "49175",
+    }))
+    refresh = LiveAccountingRefresh(
+        account=account, broker=OpenBroker(), positions=positions,
+        orders=OrderLifecycle(store), feed=StatementFeed(str(source)),
+    )
+    snap = refresh.refresh(now=now)
+    assert snap.net_liquidation_equity == Decimal("50075")
+    assert snap.daily_unrealized_pnl == Decimal("100")
+    assert snap.daily_realized_pnl == Decimal("-25")
+    assert snap.open_max_loss == Decimal("900")
+    assert snap.strategy_open_risk == (("VERTICAL", Decimal("900")),)
+    assert snap.open_positions == 1
