@@ -34,6 +34,10 @@ class BrokerMonitorHealth:
     stale_after_seconds: int
 
 
+class _RecoveryIncompleteError(RuntimeError):
+    """A completed recovery attempt reported unsafe broker or ledger state."""
+
+
 class KiteBrokerMonitor:
     """Run supervised periodic fill backfill and broker reconciliation.
 
@@ -133,7 +137,7 @@ class KiteBrokerMonitor:
                     )
                     if not getattr(result, "recovery_complete", False):
                         reasons = getattr(result, "reasons", ()) or ("recovery did not complete",)
-                        raise RuntimeError("; ".join(str(reason) for reason in reasons))
+                        raise _RecoveryIncompleteError("; ".join(str(reason) for reason in reasons))
                     self._last_success_monotonic = time.monotonic()
                     self._last_success_at = datetime.now(IST)
                     self._last_error = None
@@ -145,9 +149,14 @@ class KiteBrokerMonitor:
                     raise
                 except Exception as exc:
                     self._consecutive_failures += 1
-                    self._last_error = type(exc).__name__
+                    error_label = (
+                        str(exc)[:300]
+                        if isinstance(exc, _RecoveryIncompleteError)
+                        else type(exc).__name__
+                    )
+                    self._last_error = error_label
                     await self._set_unhealthy(
-                        f"broker polling/reconciliation failed ({type(exc).__name__})"
+                        f"broker polling/reconciliation failed: {error_label}"
                     )
                     # Discard the failed client and construct a fresh authenticated
                     # adapter before retrying; never replay a broker order submission.
