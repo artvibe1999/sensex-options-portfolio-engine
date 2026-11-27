@@ -117,6 +117,15 @@ class KiteReadOnlyAdapter:
             )
         return result
 
+    def margins(self, segment: str = "equity") -> dict[str, Any]:
+        """Return authenticated broker funds/margins for the requested segment."""
+        if segment not in {"equity", "commodity"}:
+            raise ValueError("Kite margin segment must be equity or commodity")
+        result = self._client.margins(segment)
+        if not isinstance(result, dict):
+            raise ValueError("Kite margin response must be an object")
+        return result
+
     def positions(self) -> dict[str, Any]:
         return self._client.positions()
 
