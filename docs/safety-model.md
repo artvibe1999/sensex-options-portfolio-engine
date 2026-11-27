@@ -105,3 +105,17 @@ allowlisting and separate live confirmation remain independent mandatory gates.
 Telegram `/resume` and `/confirm_live` require a successful startup-recovery result in addition to the existing broker-readiness and portfolio-risk checks. The runtime control defaults this gate to incomplete on every process start. A stale in-memory success flag is never restored from configuration or the database.
 
 The current environment-backed Telegram entrypoint does not yet construct or run the Kite startup-recovery dependencies, so it deliberately leaves this gate incomplete. Consequently, `/resume` and live confirmation remain blocked in the default runtime. The startup-recovery service is implemented and tested, but runtime wiring, lifecycle ownership, and supervised recovery are still pending. Do not manually set the gate to bypass recovery.
+
+
+## Runtime startup recovery wiring
+
+The Telegram environment entrypoint now attempts read-only Kite startup recovery before
+starting its polling loop when both `KITE_API_KEY` and `KITE_ACCESS_TOKEN` are supplied
+through the environment. It rebuilds the fill-ingestion and lifecycle services over the
+same durable SQLite store, replays pending receipts, backfills current-session trade
+history, and reconciles broker positions and orders. The startup gate is set only from
+the returned `recovery_complete` result. Missing credentials, adapter construction
+errors, or any recovery/reconciliation failure leave the gate closed while the
+paper-mode Telegram process can still start. This does not create a live-readiness
+provider, enable live order placement, schedule recurring fill polling, or refresh
+expired Kite sessions.
