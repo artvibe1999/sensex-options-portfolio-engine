@@ -11,3 +11,13 @@
 - Live broker submission is disabled by default. An acknowledgement is not a fill, and must not unlock the next multi-leg order.
 - Secrets must be injected at runtime and must never be committed.
 - Defined-risk payoff at expiry does not eliminate legging, liquidity, slippage, assignment/settlement, or overnight gap risks.
+
+
+## Broker fill ingestion boundary
+- Match broker order IDs against all durable intents, including cancelled intents that may receive late fills.
+- Verify instrument token, trading symbol and side before recording a fill.
+- Namespace broker trade IDs by broker order ID and rely on durable idempotency across replays.
+- Reject unknown/ambiguous order IDs, malformed fills, mismatched contracts and overfills.
+- Allow partial close orders only within independently confirmed remaining position exposure.
+- A broker acknowledgement is never a fill. Only independently ingested fill events update position exposure.
+- This is not a Kite event-stream integration; live execution remains disabled until adapter semantics, event delivery, reconciliation and failure recovery are validated.
