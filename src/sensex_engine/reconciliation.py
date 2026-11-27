@@ -187,6 +187,7 @@ class BrokerReconciliationService:
         *,
         contracts: list[ContractLike],
         position_lifecycle: Any,
+        order_lifecycle: Any | None = None,
     ) -> ReconciliationReport:
         """Reconcile broker exposure directly against durable position projections.
 
@@ -225,13 +226,22 @@ class BrokerReconciliationService:
                 for item in internal
                 if item.status != "OPEN" or not item.is_fully_open
             )
-            if not lifecycle_issues:
-                return report
+            order_issues: list[str] = []
+            if order_lifecycle is not None:
+                for order in order_lifecycle.active_snapshots():
+                    if str(order.get("mode", "")).lower() != "live":
+                        continue
+                    order_id = str(order.get("order_id", "UNKNOWN"))
+                    state = str(order.get("state", "UNKNOWN")).upper()
+                    order_issues.append(
+                        f"Live internal order {order_id} requires reconciliation (state={state})"
+                    )
+            all_issues = report.mismatches + lifecycle_issues + tuple(order_issues)
             return ReconciliationReport(
-                reconciled=False,
+                reconciled=not all_issues,
                 expected_quantities=report.expected_quantities,
                 broker_quantities=report.broker_quantities,
-                mismatches=report.mismatches + lifecycle_issues,
+                mismatches=all_issues,
                 pending_order_ids=report.pending_order_ids,
             )
         except Exception as exc:
