@@ -1,7 +1,7 @@
 """Optional python-telegram-bot transport with audited, fail-closed dispatch."""
+import logging
 from collections.abc import Callable
 from datetime import datetime
-import logging
 from typing import Any
 from zoneinfo import ZoneInfo
 
