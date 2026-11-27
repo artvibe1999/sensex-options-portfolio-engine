@@ -106,6 +106,9 @@ def reconcile_snapshots(
         if not isinstance(row, dict):
             issues.append("Malformed broker position row")
             continue
+        exchange = str(row.get("exchange", "")).strip().upper()
+        if exchange and exchange != "BFO":
+            continue
         try:
             quantity_value = row.get("quantity", 0)
             if isinstance(quantity_value, bool):
@@ -186,7 +189,13 @@ class BrokerReconciliationService:
     ) -> ReconciliationReport:
         try:
             if not broker.is_authenticated():
-                raise RuntimeError("Broker session is not authenticated")
+                return ReconciliationReport(
+                    reconciled=False,
+                    expected_quantities=(),
+                    broker_quantities=(),
+                    mismatches=("Broker session is not authenticated",),
+                    pending_order_ids=(),
+                )
             positions = broker.positions()
             orders = broker.orders()
             return reconcile_snapshots(
