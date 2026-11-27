@@ -138,7 +138,9 @@ def create_telegram_application(
     return application
 
 
-def operations_from_settings(settings: Any) -> OperationsController:
+def operations_from_settings(
+    settings: Any, *, portfolio_queries: Any | None = None,
+) -> OperationsController:
     """Build the allowlisted command policy from comma-separated settings IDs."""
     from .telegram_auth import TelegramAllowlist, parse_id_allowlist
 
@@ -146,7 +148,10 @@ def operations_from_settings(settings: Any) -> OperationsController:
         user_ids=parse_id_allowlist(settings.telegram_allowed_user_ids),
         chat_ids=parse_id_allowlist(settings.telegram_allowed_chat_ids),
     )
-    return OperationsController(allowlist=allowlist, mode=ModeController())
+    return OperationsController(
+        allowlist=allowlist, mode=ModeController(),
+        portfolio_queries=portfolio_queries,
+    )
 
 
 def _sqlite_database_path(database_url: str) -> str:
@@ -169,10 +174,20 @@ def build_application_from_settings(
     This default entrypoint deliberately supplies no readiness provider, so
     /resume and /confirm_live remain disabled until real safety services exist.
     """
-    operations = operations_from_settings(settings)
+    store = SqliteStore(_sqlite_database_path(settings.database_url))
+    from .order_lifecycle import OrderLifecycle
+    from .position_lifecycle import PositionLifecycle
+    from .portfolio_queries import PortfolioQueryService
+
+    portfolio_queries = PortfolioQueryService(
+        positions=PositionLifecycle(store),
+        orders=OrderLifecycle(store),
+    )
+    operations = operations_from_settings(
+        settings, portfolio_queries=portfolio_queries
+    )
     if not operations.allowlist.user_ids or not operations.allowlist.chat_ids:
         raise ValueError("Telegram user and chat allowlists must both be configured")
-    store = SqliteStore(_sqlite_database_path(settings.database_url))
     return create_telegram_application(
         settings.telegram_bot_token,
         operations=operations,
