@@ -88,12 +88,23 @@ class KitePortfolioRiskReadiness:
                 raise ValueError("Authoritative portfolio risk snapshot is unavailable")
             if portfolio.peak_equity is None:
                 raise ValueError("Portfolio peak equity history is unavailable")
+            if (
+                portfolio.open_positions < 0
+                or portfolio.entries_today < 0
+                or portfolio.open_max_loss < 0
+            ):
+                raise ValueError("Portfolio risk snapshot contains negative counters or exposure")
+            if not (
+                Decimal("0") <= portfolio.weekly_drawdown_pct <= Decimal("1")
+                and Decimal("0") <= portfolio.monthly_drawdown_pct <= Decimal("1")
+            ):
+                raise ValueError("Portfolio drawdown percentages are outside the valid range")
             equity = portfolio.net_liquidation_equity
             if equity <= 0 or portfolio.available_margin <= 0:
                 raise ValueError("Portfolio equity or available margin is not positive")
             if portfolio.available_margin > net:
                 raise ValueError("Portfolio available margin exceeds broker-reported funds")
-            if portfolio.open_positions > int(getattr(
+            if portfolio.open_positions >= int(getattr(
                 self._settings, "max_concurrent_positions", 2
             )):
                 raise ValueError("Portfolio exceeds maximum concurrent positions")
