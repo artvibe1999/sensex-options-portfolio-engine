@@ -72,7 +72,6 @@ _ALLOWED: dict[OrderState, set[OrderState]] = {
         OrderState.UNKNOWN,
     },
     OrderState.FILLED: set(),
-    OrderState.CANCELLED: set(),
     OrderState.REJECTED: set(),
     OrderState.EXPIRED: set(),
 }
