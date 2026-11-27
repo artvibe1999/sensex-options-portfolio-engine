@@ -105,7 +105,8 @@ class LiveReadinessService:
             ):
                 reasons.append("BFO contract master is stale or has invalid timestamp")
         except Exception as exc:
-            reasons.append(f"Contract-master check failed: {type(exc).__name__}")
+            detail = str(exc)[:200] if isinstance(exc, ValueError) else type(exc).__name__
+            reasons.append(f"Contract-master check failed: {detail}")
         try:
             market_timestamp = self.market_data_timestamp_provider()
             if not isinstance(market_timestamp, datetime) or not self._fresh(
@@ -113,7 +114,8 @@ class LiveReadinessService:
             ):
                 reasons.append("Market data is stale or has invalid timestamp")
         except Exception as exc:
-            reasons.append(f"Market-data check failed: {type(exc).__name__}")
+            detail = str(exc)[:200] if isinstance(exc, ValueError) else type(exc).__name__
+            reasons.append(f"Market-data check failed: {detail}")
         reconciliation: ReconciliationReport | None = None
         try:
             reconciliation = self.reconciliation_service.reconcile_store(
