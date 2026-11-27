@@ -87,7 +87,12 @@ class BrokerFillIngestionService:
     def _validate(event: BrokerFillEvent) -> None:
         if not isinstance(event, BrokerFillEvent):
             raise TypeError("A BrokerFillEvent instance is required")
-        if not event.broker_order_id.strip() or not event.broker_trade_id.strip():
+        if (
+            not isinstance(event.broker_order_id, str)
+            or not isinstance(event.broker_trade_id, str)
+            or not event.broker_order_id.strip()
+            or not event.broker_trade_id.strip()
+        ):
             raise ValueError("Broker order and trade IDs are required")
         if (
             not isinstance(event.instrument_token, int)
@@ -95,7 +100,12 @@ class BrokerFillIngestionService:
             or event.instrument_token <= 0
         ):
             raise ValueError("Broker fill instrument token must be a positive integer")
-        if not event.tradingsymbol.strip() or event.side.upper() not in {"BUY", "SELL"}:
+        if (
+            not isinstance(event.tradingsymbol, str)
+            or not event.tradingsymbol.strip()
+            or not isinstance(event.side, str)
+            or event.side.upper() not in {"BUY", "SELL"}
+        ):
             raise ValueError("Broker fill contract and side are invalid")
         if (
             not isinstance(event.quantity, int)
@@ -109,7 +119,10 @@ class BrokerFillIngestionService:
             raise ValueError("Broker fill price must be a valid decimal") from exc
         if not price.is_finite() or price <= 0:
             raise ValueError("Broker fill price must be positive and finite")
-        if not event.filled_at.strip():
+        if not isinstance(event.filled_at, str) or not event.filled_at.strip():
             raise ValueError("Broker fill timestamp is required")
-        if event.phase.upper() not in {"OPEN", "CLOSE"}:
+        if (
+            not isinstance(event.phase, str)
+            or event.phase.upper() not in {"OPEN", "CLOSE"}
+        ):
             raise ValueError("Broker fill phase must be OPEN or CLOSE")
