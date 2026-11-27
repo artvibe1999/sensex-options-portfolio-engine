@@ -70,12 +70,18 @@ def calculate_expiry_payoff(
     values = [value for _, value in scenario_pnl]
     minimum = min(values)
     maximum = max(values)
-    # For calls, the far-right tail can continue increasing; a naked long call
-    # is bounded-loss but unbounded-profit. It remains defined risk.
-    has_long_call = any(
-        leg.contract.right.value == "CE" and leg.side is Side.BUY for leg in legs
+    # Net short call quantity creates unbounded loss as the underlying rises.
+    # Reject it rather than approximating risk at an arbitrary terminal price.
+    call_slope = sum(
+        (Decimal("1") if leg.side is Side.BUY else Decimal("-1"))
+        * Decimal(leg.contract.lot_size * leg.lots)
+        for leg in legs
+        if leg.contract.right.value == "CE"
     )
-    max_profit = None if has_long_call and maximum > values[-2] else max(maximum, Decimal("0"))
+    if call_slope < 0:
+        raise ValueError("Structure has unbounded upside risk from net short calls")
+    # A positive net long-call slope is bounded-loss but unbounded-profit.
+    max_profit = None if call_slope > 0 else max(maximum, Decimal("0"))
     breakevens: list[Decimal] = []
     points = list(scenario_pnl)
     for (x1, y1), (x2, y2) in zip(points, points[1:], strict=False):
