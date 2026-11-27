@@ -12,10 +12,19 @@ Independent Python platform for managing defined-risk SENSEX options portfolios 
 
 ## Scope
 
-The initial implementation is being developed on a dedicated feature branch. It will include configuration, domain models, risk controls, a paper execution adapter, broker interfaces, Telegram authorization boundaries, persistence, tests, and operational documentation.
+SENSEX index options only. The target system supports defined-risk multi-leg strategies, intraday positions, and explicitly approved overnight positions. The initial capital value is not a fixed ceiling: sizing and eligibility use current verified net equity, deposits/withdrawals, open risk and margin.
 
-This project does not promise returns. Strategy eligibility is conditional on market data quality, liquidity, costs, margin, and portfolio risk.
+This project does not promise returns. Strategy eligibility is conditional on market data quality, liquidity, costs, margin, and portfolio risk. Strategy rules are candidate specifications and require forward validation; they are not claims of proven profitability.
+
+## Requirements and architecture
+
+- [Complete product, architecture, strategy, indicator, entry/exit, risk, execution and operations requirements](docs/requirements.md)
+- [Architecture and current component design](docs/architecture.md)
+- [Safety model](docs/safety-model.md)
+- [Development guide](docs/development.md)
+
+Backtesting/research tooling is intentionally excluded from the production repository unless explicitly authorized.
 
 ## Development
 
-See `docs/architecture.md` and `docs/safety-model.md` as the implementation is added. Backtesting/research tooling is intentionally excluded from the production repository.
+The implementation is developed on a dedicated feature branch and reviewed through a draft pull request. The project is not live-deployable while execution, reconciliation, recovery, and live-readiness gaps remain. See the requirements document's implementation-status section for the current gap list.
