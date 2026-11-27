@@ -38,6 +38,7 @@ class LiveReadinessService:
         broker: Any,
         position_lifecycle: Any,
         contracts_provider: Callable[[], tuple[list[Any], datetime]],
+        order_lifecycle: Any | None = None,
         market_data_timestamp_provider: Callable[[], datetime],
         risk_clearance_provider: Callable[[], bool],
         reconciliation_service: BrokerReconciliationService | None = None,
@@ -48,6 +49,7 @@ class LiveReadinessService:
             raise ValueError("Readiness freshness limits must be positive")
         self.broker = broker
         self.position_lifecycle = position_lifecycle
+        self.order_lifecycle = order_lifecycle
         self.contracts_provider = contracts_provider
         self.market_data_timestamp_provider = market_data_timestamp_provider
         self.risk_clearance_provider = risk_clearance_provider
