@@ -1,7 +1,6 @@
 """Telegram command policy layer; transport handlers can delegate here."""
 from dataclasses import dataclass
 
-from .domain import TradingMode
 from .mode import ModeController
 from .telegram_auth import TelegramAllowlist
 
@@ -32,7 +31,10 @@ class OperationsController:
             return "Paper mode active; entries remain paused until /resume."
         if normalized == "/live":
             self.mode.request_live(user_id, authorized=True)
-            return (\n                "Live activation requested. Send /confirm_live separately " \n                "after reviewing status."\n            )
+            return (
+                "Live activation requested. Send /confirm_live separately "
+                "after reviewing status."
+            )
         if normalized == "/confirm_live":
             if self.paused:
                 raise RuntimeError("Resume checks must pass before live activation")
@@ -52,7 +54,11 @@ class OperationsController:
             self.paused = False
             return "Entries resumed after readiness checks."
         if normalized in {"/positions", "/orders", "/pnl", "/capital", "/risk", "/strategies"}:
-            raise NotImplementedError(\n                "Read-only portfolio query requires the persistence and broker services."\n            )
+            raise NotImplementedError(
+                "Read-only portfolio query requires the persistence and broker services."
+            )
         if normalized in {"/close", "/closeall", "/emergency"}:
-            raise NotImplementedError(\n                "Position closure is disabled until reconciled execution workflows exist."\n            )
+            raise NotImplementedError(
+                "Position closure is disabled until reconciled execution workflows exist."
+            )
         raise ValueError("Unknown command. Use /help.")
