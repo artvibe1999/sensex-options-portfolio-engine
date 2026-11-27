@@ -67,11 +67,13 @@ class KiteTradeHistoryIngestor:
                 created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
             except ValueError as exc:
                 raise RuntimeError(
-                    f"Live order {snapshot.get('order_id', 'UNKNOWN')} has an invalid creation timestamp"
+                    f"Live order {snapshot.get('order_id', 'UNKNOWN')} has an "
+                    "invalid creation timestamp"
                 ) from exc
             if created.tzinfo is None or created.utcoffset() is None:
                 raise RuntimeError(
-                    f"Live order {snapshot.get('order_id', 'UNKNOWN')} has a naive creation timestamp"
+                    f"Live order {snapshot.get('order_id', 'UNKNOWN')} has a "
+                    "naive creation timestamp"
                 )
             if created.astimezone(IST).date() == session_date:
                 order_ids.append(str(snapshot["order_id"]))
