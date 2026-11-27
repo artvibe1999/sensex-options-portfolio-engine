@@ -16,7 +16,6 @@ from .broker_submission import BrokerOrderReceipt, BrokerOrderStatus
 from .execution import LegExecutionAction
 from .kite import KiteReadOnlyAdapter
 
-
 _OPEN_STATUSES = {
     "OPEN", "OPEN PENDING", "TRIGGER PENDING", "AMO REQ RECEIVED",
     "PUT ORDER REQ RECEIVED", "VALIDATION PENDING",
