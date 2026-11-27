@@ -281,3 +281,55 @@ def test_supervised_monitor_is_not_created_without_broker_credentials(tmp_path):
         broker_factory=lambda *_: pytest.fail("broker must not be constructed"),
     )
     assert monitor is None
+
+
+
+def test_emergency_command_is_allowlisted_audited_and_forces_paper(tmp_path):
+    store = SqliteStore(tmp_path / "telegram-emergency.sqlite3")
+    operations = _operations(mode=TradingMode.LIVE, paused=False)
+    calls = []
+
+    class Emergency:
+        def execute(self):
+            calls.append("executed")
+            operations.paused = True
+            operations.mode.force_paper()
+            return SimpleNamespace(completed=True, to_text=lambda: "Emergency close complete")
+
+    operations.emergency_close_all = Emergency()
+    update, message = _update(301, "/emergency")
+    asyncio.run(dispatch_command(update, None, operations=operations, store=store))
+    assert calls == ["executed"]
+    assert operations.paused
+    assert operations.mode.mode is TradingMode.PAPER
+    assert message.replies[0] == "Emergency close complete"
+    assert store.command_audit_for("telegram:301")["outcome"] == "ACCEPTED"
+
+
+def test_emergency_command_without_kite_service_still_halts_and_audits(tmp_path):
+    store = SqliteStore(tmp_path / "telegram-emergency-unavailable.sqlite3")
+    operations = _operations(mode=TradingMode.LIVE, paused=False)
+    update, message = _update(302, "/closeall")
+    asyncio.run(dispatch_command(update, None, operations=operations, store=store))
+    assert operations.paused
+    assert operations.mode.mode is TradingMode.PAPER
+    assert "no broker order was sent" in message.replies[0]
+    assert store.command_audit_for("telegram:302")["outcome"] == "BLOCKED"
+
+
+def test_emergency_command_rejects_unauthorized_user_before_execution(tmp_path):
+    store = SqliteStore(tmp_path / "telegram-emergency-denied.sqlite3")
+    operations = _operations(mode=TradingMode.LIVE, paused=False)
+    calls = []
+
+    class Emergency:
+        def execute(self):
+            calls.append("executed")
+            return SimpleNamespace(completed=True, to_text=lambda: "closed")
+
+    operations.emergency_close_all = Emergency()
+    update, message = _update(303, "/emergency", user_id=999)
+    asyncio.run(dispatch_command(update, None, operations=operations, store=store))
+    assert calls == []
+    assert "not authorized" in message.replies[0]
+    assert store.command_audit_for("telegram:303")["outcome"] == "DENIED"
