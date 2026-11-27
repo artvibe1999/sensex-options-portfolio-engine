@@ -9,6 +9,7 @@ import hashlib
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from .capital import adaptive_risk_budget, affordable_lots
 from .domain import PortfolioSnapshot
@@ -16,6 +17,7 @@ from .filled_risk import filled_position_risk
 from .reconciliation import BrokerReconciliationService, ReconciliationReport
 
 ACCOUNT_ID = "account:default"
+IST = ZoneInfo("Asia/Kolkata")
 
 
 def _decimal(value: Any, field: str) -> Decimal:
@@ -239,12 +241,12 @@ class PortfolioAccountingService:
             raise ValueError("Snapshot clock must be timezone-aware")
         mark = max(marks, key=lambda e: e["event_id"])["payload"]
         marked_at = datetime.fromisoformat(mark["marked_at"])
-        if current.astimezone(UTC) - marked_at.astimezone(UTC) > max_mark_age:
+        if not timedelta(0) <= current - marked_at <= max_mark_age:
             return None
         opening = _decimal(opened[0]["payload"]["amount"], "opening_equity")
         deposits = withdrawals = realized = fees = Decimal("0")
         daily_realized = daily_flows = Decimal("0")
-        today = current.astimezone(UTC).date()
+        today = current.astimezone(IST).date()
         for event in events:
             payload = event["payload"]
             if event["event_type"] == "ACCOUNT_CASH_FLOW":
@@ -258,7 +260,7 @@ class PortfolioAccountingService:
                     signed = -amount
                 else:
                     raise ValueError("Corrupt account cash-flow event")
-                event_date = datetime.fromisoformat(payload["occurred_at"]).astimezone(UTC).date()
+                event_date = datetime.fromisoformat(payload["occurred_at"]).astimezone(IST).date()
                 if event_date == today:
                     daily_flows += signed
             elif event["event_type"] == "ACCOUNT_TRADE_RESULT":
@@ -266,7 +268,7 @@ class PortfolioAccountingService:
                 charge = _decimal(payload["fees"], "fees")
                 realized += pnl
                 fees += charge
-                event_date = datetime.fromisoformat(payload["occurred_at"]).astimezone(UTC).date()
+                event_date = datetime.fromisoformat(payload["occurred_at"]).astimezone(IST).date()
                 if event_date == today:
                     daily_realized += pnl - charge
         unrealized = _decimal(mark["unrealized_pnl"], "unrealized_pnl")
@@ -303,7 +305,7 @@ class PortfolioAccountingService:
         week_start = today - timedelta(days=today.weekday())
         month_start = today.replace(day=1)
         def period_drawdown(start: date) -> Decimal:
-            period_values = [v for t, v in mark_rows if t.date() >= start]
+            period_values = [v for t, v in mark_rows if t.astimezone(IST).date() >= start]
             if not period_values or current_adjusted_equity <= 0:
                 return Decimal("0") if current_adjusted_equity > 0 else Decimal("1")
             high = max(period_values)
