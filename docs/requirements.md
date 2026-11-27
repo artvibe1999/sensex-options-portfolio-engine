@@ -858,6 +858,7 @@ Implemented in the current feature branch at the time this document was added:
 - EMA/ATR/ADX regime classifier.
 - Payoff validation and four directional vertical candidate types.
 - Read-only broker reconciliation for BFO positions/orders.
+- Foundational append-only order-intent/state/fill ledger with fill-ID idempotency, cumulative-fill checks, transition guards, weighted average fill price, and restart reconstruction. It is currently single-process and is not integrated with broker order placement; complete transactional multi-process lifecycle and position aggregation remain outstanding.
 - Ruff and pytest CI.
 
 Not yet implemented / not live-ready:
