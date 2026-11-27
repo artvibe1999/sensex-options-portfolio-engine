@@ -82,7 +82,11 @@ class RiskEngine:
         per_trade_cap = budget.max_trade_risk
         candidate_risk = candidate.max_loss + candidate.estimated_costs
         if candidate_risk > per_trade_cap:
-            return RiskDecision(\n                False,\n                "Candidate exceeds adaptive per-trade risk budget",\n                per_trade_cap,\n            )
+            return RiskDecision(
+                False,
+                "Candidate exceeds adaptive per-trade risk budget",
+                per_trade_cap,
+            )
         remaining = budget.max_aggregate_risk - portfolio.open_max_loss
         if candidate_risk > remaining:
             return RiskDecision(
