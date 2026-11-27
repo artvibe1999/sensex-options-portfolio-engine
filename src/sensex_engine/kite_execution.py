@@ -6,7 +6,7 @@ requires exact tag + contract/order-field agreement. Ambiguity is never retried.
 """
 from __future__ import annotations
 
-import time
+from time import monotonic, sleep
 from decimal import Decimal, InvalidOperation
 from hashlib import sha256
 from threading import Lock
@@ -287,8 +287,8 @@ class KiteOrderExecutionAdapter:
     @classmethod
     def _throttle_order_call(cls) -> None:
         with cls._rate_lock:
-            now = time.monotonic()
+            now = monotonic()
             wait = cls._minimum_order_interval - (now - cls._last_order_call)
             if wait > 0:
-                time.sleep(wait)
+                sleep(wait)
             cls._last_order_call = time.monotonic()
