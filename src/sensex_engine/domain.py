@@ -91,6 +91,7 @@ class PortfolioSnapshot:
     open_positions: int = 0
     entries_today: int = 0
     deposits_withdrawals_today: Decimal = Decimal("0")
+    peak_equity: Decimal | None = None
 
 
 @dataclass(frozen=True)
