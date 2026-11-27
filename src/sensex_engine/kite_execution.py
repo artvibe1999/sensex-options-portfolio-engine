@@ -246,7 +246,14 @@ class KiteOrderExecutionAdapter:
                 or int(row["instrument_token"]) == action.instrument_token
             )
             and row.get("transaction_type") == action.side
+            and row.get("order_type") == "LIMIT"
+            and row.get("product") == "NRML"
+            and row.get("variety") == "regular"
             and int(row.get("quantity") or 0) == action.quantity
+            and (
+                action.limit_price is None
+                or Decimal(str(row.get("price"))) == action.limit_price
+            )
         )
         if not expected:
             raise RuntimeError(
