@@ -123,7 +123,7 @@ class KitePortfolioRiskReadiness:
                 self._settings, "monthly_drawdown_stop_pct", 0.07
             )))
             daily_pnl = portfolio.daily_realized_pnl + portfolio.daily_unrealized_pnl
-            if daily_pnl <= -equity * daily_stop:
+            if daily_pnl <= -(portfolio.start_of_day_equity or equity) * daily_stop:
                 raise ValueError("Portfolio daily loss stop has been reached")
             if portfolio.weekly_drawdown_pct >= weekly_stop:
                 raise ValueError("Portfolio weekly drawdown stop has been reached")
