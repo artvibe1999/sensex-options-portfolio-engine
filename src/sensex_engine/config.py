@@ -1,5 +1,5 @@
 """Validated application configuration with a paper-only startup invariant."""
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     telegram_allowed_chat_ids: str = ""
     kite_api_key: SecretStr = Field(default=SecretStr(""), repr=False)
     kite_access_token: SecretStr = Field(default=SecretStr(""), repr=False)
+    kite_monitor_poll_interval_seconds: int = Field(30, ge=10, le=300)
+    kite_monitor_max_stale_seconds: int = Field(120, ge=30, le=900)
+    kite_monitor_retry_max_seconds: int = Field(30, ge=5, le=120)
 
     # Environment configuration can never silently boot the process into live mode.
     trading_mode: Literal["paper", "live"] = "paper"
@@ -34,6 +37,14 @@ class Settings(BaseSettings):
     def force_paper_on_boot(cls, value: object) -> str:
         # Live mode is never restored from .env after a restart.
         return "paper"
+
+    @field_validator("kite_monitor_max_stale_seconds")
+    @classmethod
+    def monitor_stale_window_must_cover_two_polls(cls, value: int, info: Any) -> int:
+        interval = info.data.get("kite_monitor_poll_interval_seconds", 30)
+        if value < interval * 2:
+            raise ValueError("kite_monitor_max_stale_seconds must be at least twice the poll interval")
+        return value
 
     def startup_mode(self) -> Literal["paper"]:
         return "paper"
