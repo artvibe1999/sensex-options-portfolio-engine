@@ -40,6 +40,8 @@ class KiteReadOnlyAdapter:
             return False
 
     def instruments(self) -> list[Contract]:
+        # Replace, do not merge, the cache so delisted/expired contracts cannot linger.
+        self._symbols_by_token.clear()
         rows = self._client.instruments("BFO")
         contracts: list[Contract] = []
         for row in rows:
