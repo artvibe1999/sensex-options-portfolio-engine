@@ -53,6 +53,7 @@ class FakeBroker:
         self.lookups = tuple(lookups)
         self.submit_calls = []
         self.lookup_calls = []
+        self.cancel_calls = []
 
     def submit_order(self, action, *, client_order_key):
         self.submit_calls.append((action, client_order_key))
@@ -65,6 +66,10 @@ class FakeBroker:
         if isinstance(self.lookups, Exception):
             raise self.lookups
         return self.lookups
+
+    def cancel_order(self, broker_order_id, *, client_order_key):
+        self.cancel_calls.append((broker_order_id, client_order_key))
+        return BrokerOrderReceipt(broker_order_id, BrokerOrderStatus.OPEN, "cancel requested")
 
 
 def test_submission_is_durably_claimed_before_single_broker_call(tmp_path):
@@ -126,7 +131,7 @@ def test_timeout_marks_unknown_and_restart_recovery_does_not_resubmit(tmp_path):
     recovered = DurableBrokerSubmissionService(restarted, recovered_broker)
 
     result = recovered.recover("internal-1")
-    assert result.state is OrderState.ACKNOWLEDGED
+    assert result.state is OrderState.OPEN
     assert result.broker_order_id == "kite-123"
     assert recovered_broker.submit_calls == []
     assert recovered_broker.lookup_calls[0][0] == "sx-test-order-0001"
@@ -306,4 +311,28 @@ def test_live_limit_price_must_match_immutable_durable_intent(tmp_path):
     assert broker.submit_calls == []
     outcome = service.submit_once("internal-1", matching)
     assert outcome.state is OrderState.ACKNOWLEDGED
+    assert len(broker.submit_calls) == 1
+
+
+
+def test_cancel_acknowledgement_is_not_final_and_refresh_requires_cancelled_status(tmp_path):
+    lifecycle = make_lifecycle(tmp_path)
+    broker = FakeBroker()
+    service = DurableBrokerSubmissionService(
+        lifecycle, broker, live_submission_enabled=True
+    )
+    submitted = service.submit_once("internal-1", ACTION)
+    assert submitted.state is OrderState.ACKNOWLEDGED
+
+    cancel = service.cancel_once("internal-1")
+    assert cancel.state is OrderState.CANCEL_PENDING
+    assert len(broker.cancel_calls) == 1
+
+    broker.lookups = (BrokerOrderReceipt("kite-123", BrokerOrderStatus.OPEN),)
+    still_open = service.refresh_order("internal-1")
+    assert still_open.state is OrderState.CANCEL_PENDING
+
+    broker.lookups = (BrokerOrderReceipt("kite-123", BrokerOrderStatus.CANCELLED),)
+    confirmed = service.refresh_order("internal-1")
+    assert confirmed.state is OrderState.CANCELLED
     assert len(broker.submit_calls) == 1
