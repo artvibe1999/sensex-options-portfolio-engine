@@ -242,7 +242,7 @@ def test_modify_order_checks_tick_size_lot_size_and_filled_quantity():
         "order_type": "LIMIT",
         "variety": "regular",
         "quantity": 40,
-        "filled_quantity": 20,
+        "filled_quantity": 30,
         "transaction_type": "BUY",
     }]
     result = adapter.modify_order(
