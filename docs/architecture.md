@@ -140,3 +140,10 @@ RECEIVED. The order ledger remains the first fill fact and the position projecti
 is replayed idempotently, allowing recovery after interruption between the two writes.
 This inbox is not a broker event transport: a future Kite adapter must still provide
 reliable event acquisition, reconnect/backfill, and reconciliation for missed events.
+
+
+Inbox claim attempts also act as fencing tokens. Completion and failure updates must
+match the exact attempt number that acquired the lease, so a stale worker cannot
+finalize or reset a receipt after another worker has reclaimed it. A stale worker
+may still finish an idempotent projection replay, but it cannot change the newer
+worker's inbox state.
