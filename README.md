@@ -27,4 +27,4 @@ Backtesting/research tooling is intentionally excluded from the production repos
 
 ## Development
 
-The implementation is developed on a dedicated feature branch and reviewed through a draft pull request. The project is not live-deployable while execution, reconciliation, recovery, and live-readiness gaps remain. See the requirements document's implementation-status section for the current gap list.
+The implementation is developed on a dedicated feature branch and reviewed through a draft pull request. The project is not live-deployable while execution, reconciliation, recovery, and live-readiness gaps remain. Telegram resume and live confirmation also fail closed until startup recovery is explicitly completed; the default environment entrypoint does not yet wire that service. See the requirements document's implementation-status section for the current gap list.
