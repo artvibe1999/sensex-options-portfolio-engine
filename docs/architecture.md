@@ -166,3 +166,15 @@ portfolio events remain the durable local record. Repeated polling is idempotent
 through the broker order/trade ID inbox key. WebSocket/postback acquisition,
 reconnect scheduling, missed-event orchestration and production runtime wiring
 remain separate work.
+
+
+## Restart-safe current-session trade-history discovery
+
+Order intent projections now expose the immutable SQLite event creation timestamp.
+`KiteTradeHistoryIngestor.poll_current_session(session_date=...)` scans all durable
+order snapshots, selects correlated LIVE intents created on the explicit IST session
+date, and backfills each order's individual Kite trade history. It deliberately
+includes canceled/rejected terminal intents so late fills after cancellation are not
+lost. It excludes paper intents, uncorrelated intents and prior-session orders.
+The caller must supply the session date and schedule repeated calls; this helper is
+not itself a scheduler and does not replace asynchronous Kite postbacks/websockets.
