@@ -11,8 +11,14 @@ The application is split into domain, market-data/broker ports, strategy eligibi
 5. Classify regime. Unknown/transition regimes are no-trade.
 6. Generate only defined-risk multi-leg candidates and calculate payoff, margin, transaction costs, and stress loss.
 7. Evaluate the candidate against portfolio-wide limits and current broker reconciliation.
-8. Submit through the selected execution port. Persist intent before sending orders and reconcile every leg/fill.
+8. Build a protective leg execution plan: submit long protective legs before opening short legs; when closing, buy back original short legs before selling long protective legs. Persist intent before any broker submission and reconcile every leg/fill.
 9. Monitor positions and report state through Telegram.
+
+The current execution planner only calculates a deterministic leg order and contract
+quantities from the exchange lot size. It is not an execution coordinator: it does
+not submit an order, wait for a fill, gate the next leg, cancel siblings, or recover
+from rejects/timeouts. The live broker adapter remains intentionally absent, so
+this plan must not be treated as proof that a multi-leg position is protected.
 
 ## Capital accounting
 
