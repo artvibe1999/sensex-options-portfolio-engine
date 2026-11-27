@@ -40,10 +40,11 @@ contract mismatches, malformed fills, and fills that exceed the remaining order 
 position quantity are rejected. Partial close intents may be smaller than the
 original planned leg, but cannot exceed confirmed remaining exposure.
 
-This is an adapter-neutral ingestion boundary only. It does not connect to Kite
-websocket/order updates, poll trade history, establish event delivery guarantees,
-or prove that broker trade IDs and timestamps are normalized correctly. Operational
-reconciliation and durable retry of unprocessed inbound events remain required.
+This remains an adapter-neutral durable ingestion boundary. The supervised
+Kite monitor now acquires missed fills by periodically polling per-order trade
+history and routes them through this inbox. Kite websocket/postback subscription is
+not used; correctness relies on current-session history backfill and periodic
+broker reconciliation. Durable retry of unprocessed inbound events remains required.
 
 Live submission is disabled by default, and no Kite order-placement adapter or
 runtime wiring exists. The injected broker port must provide reliable exact-key
@@ -159,13 +160,13 @@ quantity, price and fill timestamp, then sends normalized events through the dur
 fill inbox. The fill phase is derived by comparing the durable order side with its
 original position-leg side (same side = OPEN; inverse side = CLOSE).
 
-This adapter does not place, modify or cancel orders and does not create a polling
-loop. Callers must select current-session order IDs: Kite's order and trade books
-are transient and available for the current day only. Persisted inbox receipts and
-portfolio events remain the durable local record. Repeated polling is idempotent
-through the broker order/trade ID inbox key. WebSocket/postback acquisition,
-reconnect scheduling, missed-event orchestration and production runtime wiring
-remain separate work.
+This adapter does not place, modify or cancel orders and does not create its own
+polling loop. The supervised runtime selects current-session order IDs on each
+cycle: Kite's order and trade books are transient and available for the current day
+only. Persisted inbox receipts and portfolio events remain the durable local record.
+Repeated polling is idempotent through the broker order/trade ID inbox key. The
+supervisor owns recurring polling, adapter recreation, retry/backoff, missed-event
+backfill, stale-state detection and Telegram health alerts.
 
 
 ## Restart-safe current-session trade-history discovery
@@ -189,8 +190,9 @@ and (3) reconcile durable positions and orders against read-only broker state.
 It refuses non-current session dates, stops before broker polling if local receipt
 replay fails, and returns ready only when the final broker reconciliation passes.
 The caller must keep entries paused unless `StartupRecoveryResult.ready` is true.
-This service does not schedule itself, enable live mode, or submit/cancel orders;
-runtime wiring, recurring polling, and operational supervision remain required.
+This service does not schedule itself, enable live mode, or submit/cancel orders.
+The Telegram runtime invokes it at startup and the supervised Kite monitor repeats
+it during operation with bounded retry/backoff and fail-closed health supervision.
 
 
 Safety clarification: the startup result field is named `recovery_complete`, not
