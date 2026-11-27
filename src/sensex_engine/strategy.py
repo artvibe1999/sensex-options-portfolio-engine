@@ -2,7 +2,7 @@
 from decimal import Decimal
 
 from .domain import OptionLeg, Regime, Side, StrategyCandidate
-from .option_chain import OptionChainSnapshot, OptionAnalytics
+from .option_chain import OptionAnalytics, OptionChainSnapshot
 from .payoff import calculate_expiry_payoff
 
 
@@ -87,7 +87,11 @@ def generate_directional_verticals(
                 (x for x in expiry_items if x.contract.right.value == "CE"),
                 key=lambda x: x.contract.strike,
             )
-            atm = min(calls, key=lambda x: abs(x.contract.strike - chain.underlying_price), default=None)
+            atm = min(
+                calls,
+                key=lambda x: abs(x.contract.strike - chain.underlying_price),
+                default=None,
+            )
             if atm is None:
                 continue
             short = next((x for x in calls if x.contract.strike > chain.underlying_price), None)
@@ -100,7 +104,10 @@ def generate_directional_verticals(
                 short_leg=short,
                 lots=lots,
                 costs_per_lot=costs_per_lot,
-                rationale="Bull-trend regime; defined-risk call debit vertical using current listed strikes",
+                rationale=(
+                    "Bull-trend regime; defined-risk call debit vertical "
+                    "using current listed strikes"
+                ),
             )
         else:
             puts = sorted(
@@ -108,7 +115,11 @@ def generate_directional_verticals(
                 key=lambda x: x.contract.strike,
                 reverse=True,
             )
-            atm = min(puts, key=lambda x: abs(x.contract.strike - chain.underlying_price), default=None)
+            atm = min(
+                puts,
+                key=lambda x: abs(x.contract.strike - chain.underlying_price),
+                default=None,
+            )
             if atm is None:
                 continue
             short = next((x for x in puts if x.contract.strike < chain.underlying_price), None)
@@ -121,7 +132,10 @@ def generate_directional_verticals(
                 short_leg=short,
                 lots=lots,
                 costs_per_lot=costs_per_lot,
-                rationale="Bear-trend regime; defined-risk put debit vertical using current listed strikes",
+                rationale=(
+                    "Bear-trend regime; defined-risk put debit vertical "
+                    "using current listed strikes"
+                ),
             )
         if candidate is not None:
             candidates.append(candidate)
