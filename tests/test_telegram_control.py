@@ -40,6 +40,12 @@ def test_live_requires_request_then_unpaused_confirmation_and_checks():
             broker_ready=True, risk_clear=True,
         )
     ops.paused = False
+    with pytest.raises(RuntimeError, match="startup recovery"):
+        ops.handle(
+            "/confirm_live", user_id=11, chat_id=22,
+            broker_ready=True, risk_clear=True,
+        )
+    ops.startup_recovery_complete = True
     with pytest.raises(RuntimeError):
         ops.handle(
             "/confirm_live", user_id=11, chat_id=22,
@@ -54,6 +60,12 @@ def test_live_requires_request_then_unpaused_confirmation_and_checks():
 
 def test_resume_fails_closed_without_broker_and_risk_checks():
     ops = make_ops()
+    with pytest.raises(RuntimeError, match="startup recovery"):
+        ops.handle(
+            "/resume", user_id=11, chat_id=22,
+            broker_ready=True, risk_clear=True,
+        )
+    ops.startup_recovery_complete = True
     with pytest.raises(RuntimeError):
         ops.handle("/resume", user_id=11, chat_id=22)
 
