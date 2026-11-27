@@ -109,3 +109,17 @@ def test_broker_service_fails_closed_when_session_is_not_authenticated():
     )
     assert not report.reconciled
     assert "not authenticated" in report.mismatches[0]
+
+
+def test_reconciliation_rejects_fractional_broker_quantities():
+    contracts = [_contract(1, "SENSEX80000CE", "80000")]
+    report = reconcile_snapshots(
+        contracts=contracts,
+        internal_positions=[],
+        broker_positions={"net": [
+            {"tradingsymbol": "SENSEX80000CE", "quantity": "1.5"}
+        ]},
+        broker_orders=[],
+    )
+    assert not report.reconciled
+    assert any("invalid net quantity" in item for item in report.mismatches)
