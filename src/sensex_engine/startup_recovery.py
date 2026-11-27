@@ -66,8 +66,16 @@ class KiteStartupRecoveryService:
         recovered_receipts = 0
         backfilled_fills = 0
         try:
-            receipts = self._fill_ingestion.recover_pending()
+            receipts = self._fill_ingestion.recover_pending(limit=1000)
             recovered_receipts = len(receipts)
+            if self._fill_ingestion.has_pending_receipts():
+                return StartupRecoveryResult(
+                    recovery_complete=False,
+                    recovered_receipts=recovered_receipts,
+                    backfilled_fills=0,
+                    reconciliation=None,
+                    reasons=("Unprocessed broker fill receipts remain after recovery",),
+                )
             fills = self._trade_history.poll_current_session(session_date=session_date)
             backfilled_fills = len(fills)
             contracts = self._contracts_provider()
