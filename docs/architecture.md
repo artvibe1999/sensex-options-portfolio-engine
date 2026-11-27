@@ -23,3 +23,22 @@ Sizing uses net liquidation equity, not the initial deposit. Deposits and withdr
 Bull call debit spread, bull put credit spread, bear put debit spread, bear call credit spread, iron condor, iron butterfly, calendars/diagonals, and defined-debit long-volatility structures are candidates. Each must have explicit regime, liquidity, IV, Greek, expiry, and scenario gates. No profitability claim is made without independent validation.
 
 Backtesting/research tooling is intentionally excluded from this production repository.
+
+## Option-chain analytics
+
+The read-only option-chain builder joins the current BFO SENSEX contract master to
+Kite quotes by instrument token. It excludes stale, missing, crossed, wide-spread,
+shallow, expired, or unpriceable contracts and records a rejection reason.
+
+Implied volatility and Greeks are Black–Scholes estimates computed from the
+bid/ask midpoint, an explicitly supplied SENSEX index price and timestamp, and an
+explicit annual continuously compounded risk-free rate. The model assumes zero
+dividend yield and treats expiry as 15:30 Asia/Kolkata on the exchange expiry
+date. Theta is per calendar day; vega and rho are per one percentage-point
+change. These are approximations, not exchange-provided Greeks. Do not use them
+as standalone entry signals or as a substitute for portfolio stress testing.
+
+The caller must supply a fresh underlying index price and timestamp. The builder
+fails closed for stale underlying data and omits individual contracts whose
+quotes or model prices fail validation. It does not fetch an option chain from a
+nonexistent/assumed Kite endpoint, place orders, or authorize live trading.
