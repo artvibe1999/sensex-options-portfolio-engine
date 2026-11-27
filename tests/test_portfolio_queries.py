@@ -1,7 +1,12 @@
+from datetime import UTC, datetime
+from decimal import Decimal
+
+from sensex_engine.accounting import PortfolioAccountingService
 from sensex_engine.order_lifecycle import OrderLifecycle
 from sensex_engine.persistence import SqliteStore
 from sensex_engine.portfolio_queries import PortfolioQueryService
 from sensex_engine.position_lifecycle import PositionLifecycle
+from sensex_engine.reconciliation import ReconciliationReport
 
 
 def make_queries(tmp_path, *, max_items=12, max_message_chars=3500):
@@ -83,9 +88,6 @@ def test_invalid_output_limits_are_rejected(tmp_path):
 
 
 def test_accounting_reports_are_unavailable_until_fresh_reconciled_mark(tmp_path):
-    from decimal import Decimal
-    from sensex_engine.accounting import PortfolioAccountingService
-
     store = SqliteStore(tmp_path / "accounting-queries.sqlite3")
     accounting = PortfolioAccountingService(store=store)
     queries = PortfolioQueryService(
@@ -98,11 +100,6 @@ def test_accounting_reports_are_unavailable_until_fresh_reconciled_mark(tmp_path
 
 
 def test_accounting_telegram_views_render_reconciled_values(tmp_path):
-    from datetime import UTC, datetime
-    from decimal import Decimal
-    from sensex_engine.accounting import PortfolioAccountingService
-    from sensex_engine.reconciliation import ReconciliationReport
-
     store = SqliteStore(tmp_path / "accounting-queries-ready.sqlite3")
     accounting = PortfolioAccountingService(store=store)
     now = datetime.now(UTC)
