@@ -94,7 +94,7 @@ def generate_directional_verticals(
             )
             if atm is None:
                 continue
-            short = next((x for x in calls if x.contract.strike > chain.underlying_price), None)
+            short = next((x for x in calls if x.contract.strike > atm.contract.strike), None)
             if short is None or short.contract.strike <= atm.contract.strike:
                 continue
             candidate = _vertical(
@@ -122,7 +122,7 @@ def generate_directional_verticals(
             )
             if atm is None:
                 continue
-            short = next((x for x in puts if x.contract.strike < chain.underlying_price), None)
+            short = next((x for x in puts if x.contract.strike < atm.contract.strike), None)
             if short is None or short.contract.strike >= atm.contract.strike:
                 continue
             candidate = _vertical(
