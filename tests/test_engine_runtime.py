@@ -177,3 +177,16 @@ def test_live_still_needs_request_and_separate_confirmation():
     assert ops.mode.mode.value == "live"
     ops.handle("/paper", user_id=1, chat_id=2)
     assert ops.mode.mode.value == "paper" and ops.paused
+
+
+def test_help_lists_every_registered_command_and_start_aliases_help():
+    from sensex_engine.telegram_control import COMMAND_HELP, help_text
+    from sensex_engine.telegram_transport import COMMANDS
+
+    ops = _ops(FakeEngine())
+    text = ops.handle("/help", user_id=1, chat_id=2)
+    assert ops.handle("/start", user_id=1, chat_id=2) == text == help_text()
+    for name, menu, _ in COMMAND_HELP:
+        assert f"/{name} - " in text
+        assert name in COMMANDS and 0 < len(menu) <= 256 and name.islower()
+    assert "start" in COMMANDS

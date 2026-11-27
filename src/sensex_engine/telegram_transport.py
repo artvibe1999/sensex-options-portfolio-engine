@@ -9,17 +9,13 @@ from zoneinfo import ZoneInfo
 from .broker_monitor import KiteBrokerMonitor
 from .mode import ModeController
 from .persistence import SqliteStore
-from .telegram_control import OperationsController
+from .telegram_control import COMMAND_HELP, OperationsController
 
 ReadinessProvider = Callable[[], tuple[bool, bool]]
 IST = ZoneInfo("Asia/Kolkata")
 logger = logging.getLogger(__name__)
 
-COMMANDS = (
-    "help", "status", "paper", "live", "confirm_live",
-    "pause", "resume", "positions", "orders", "pnl",
-    "capital", "risk", "strategies", "close", "closeall", "emergency",
-)
+COMMANDS = ("start", *(name for name, _, _ in COMMAND_HELP))
 
 
 async def dispatch_command(

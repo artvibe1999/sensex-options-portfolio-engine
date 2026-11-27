@@ -1,9 +1,104 @@
 """Telegram command policy layer; transport handlers can delegate here."""
+
 from dataclasses import dataclass
 from typing import Any
 
 from .mode import ModeController
 from .telegram_auth import TelegramAllowlist
+
+# Single source of truth for the Telegram command menu (setMyCommands) and /help.
+# (command, menu description <= 256 chars, detailed help line)
+COMMAND_HELP: tuple[tuple[str, str, str], ...] = (
+    ("help", "List all commands with details", "Show this list."),
+    (
+        "status",
+        "Mode, market state, regime, capital tier, last decision",
+        "Mode (PAPER/LIVE), live-gate state, SENSEX spot, regime, ADX/RSI/VWAP/ATM IV, capital "
+        "tier and risk budget, latest arbitration result and any warning.",
+    ),
+    (
+        "strategies",
+        "Why each of the 8 strategies is or isn't eligible now",
+        "Per-strategy result on the last completed 5-min bar: ELIGIBLE with score, risk/lot and "
+        "legs, or the exact failed rules / rejection reason.",
+    ),
+    (
+        "positions",
+        "Open engine positions with legs and live P&L",
+        "Open paper and live positions: id, strategy, lots, P&L at bid/ask, max loss, legs.",
+    ),
+    (
+        "pnl",
+        "Today's and all-time realised P&L, win rate, profit factor",
+        "Realised P&L after charges for today and all time, per mode.",
+    ),
+    (
+        "capital",
+        "Equity, start-of-day, peak, open risk, margin room",
+        "Dynamic equity (paper compounds; live = Kite funds + engine P&L) and the capital-tier "
+        "risk policy in force.",
+    ),
+    (
+        "risk",
+        "Same as /capital: risk budget, drawdown, stops",
+        "Capital-tier risk per trade, aggregate cap, daily stop, drawdown scaling.",
+    ),
+    (
+        "orders",
+        "Durable live order ledger",
+        "Live broker orders recorded by the execution ledger (paper fills are not orders).",
+    ),
+    (
+        "pause",
+        "Stop new entries (paper and live)",
+        "No new entries; open positions are still managed (targets, stops, 15:10 square-off).",
+    ),
+    (
+        "resume",
+        "Resume entries; also checks live readiness gates",
+        "Paper entries resume immediately. Live gates open only if Kite auth, contracts, fresh "
+        "quotes, reconciliation and risk checks all pass (reason shown if not).",
+    ),
+    (
+        "paper",
+        "Switch to PAPER mode and pause live gates",
+        "Forces PAPER. Existing live positions are still managed and exited.",
+    ),
+    (
+        "live",
+        "Request LIVE mode (needs /confirm_live)",
+        "Step 1 of 2. Requires a successful /resume first. Does not activate by itself.",
+    ),
+    (
+        "confirm_live",
+        "Confirm LIVE mode after /live",
+        "Step 2 of 2. Re-checks every readiness gate, then real orders are placed for new "
+        "entries. Every restart returns to PAPER.",
+    ),
+    (
+        "close",
+        "Close one position: /close <id> confirm",
+        "Controlled close of one position from /positions, e.g. /close 9aae614db54c4d5c confirm.",
+    ),
+    (
+        "closeall",
+        "Emergency: halt entries and close everything",
+        "Pauses entries, forces PAPER, cancels pending live entries, closes live positions "
+        "(shorts first) with broker confirmation, and closes paper positions.",
+    ),
+    ("emergency", "Same as /closeall", "Alias of /closeall."),
+)
+
+
+def help_text() -> str:
+    lines = ["SENSEX Hedge Engine commands", ""]
+    lines += [f"/{name} - {detail}" for name, _, detail in COMMAND_HELP]
+    lines += [
+        "",
+        "PAPER is the default on every start. LIVE: /resume -> /live -> /confirm_live. "
+        "Entries 09:30-14:30 IST, intraday square-off 15:10.",
+    ]
+    return "\n".join(lines)
 
 
 @dataclass
@@ -46,14 +141,8 @@ class OperationsController:
             if self.engine is not None:
                 text += "\n" + self.engine.status_text()
             return text
-        if normalized == "/help":
-            return (
-                "Commands: /status /paper /live /confirm_live /pause /resume /positions /orders "
-                "/pnl /capital /risk /strategies /close <id> confirm /closeall /emergency. "
-                "PAPER is the default on every start. LIVE needs /resume (all readiness gates), "
-                "then /live and a separate /confirm_live. Emergency close-all immediately "
-                "halts entries and forces paper mode."
-            )
+        if normalized in {"/help", "/start"}:
+            return help_text()
         if normalized == "/paper":
             self.mode.force_paper()
             self.paused = True
@@ -61,8 +150,7 @@ class OperationsController:
         if normalized == "/live":
             self.mode.request_live(user_id, authorized=True)
             return (
-                "Live activation requested. Send /confirm_live separately "
-                "after reviewing status."
+                "Live activation requested. Send /confirm_live separately after reviewing status."
             )
         if normalized == "/confirm_live":
             if not self.startup_recovery_complete:
@@ -92,8 +180,10 @@ class OperationsController:
                     reason = f" ({self.readiness_reason()})"
                 except Exception:
                     reason = ""
-            return ("Paper entries resumed. Live gates remain closed: startup recovery, broker "
-                    f"readiness or risk checks did not pass{reason}.")
+            return (
+                "Paper entries resumed. Live gates remain closed: startup recovery, broker "
+                f"readiness or risk checks did not pass{reason}."
+            )
         if normalized == "/resume":
             if not self.startup_recovery_complete:
                 raise RuntimeError("Cannot resume: startup recovery has not completed")
@@ -116,9 +206,7 @@ class OperationsController:
             return self.engine.close_one(parts[1], user_id=user_id)
         if normalized in {"/positions", "/orders"}:
             if self.portfolio_queries is None:
-                raise NotImplementedError(
-                    "Read-only portfolio ledger services are not configured."
-                )
+                raise NotImplementedError("Read-only portfolio ledger services are not configured.")
             if normalized == "/positions":
                 return self.portfolio_queries.positions_text()
             return self.portfolio_queries.orders_text()

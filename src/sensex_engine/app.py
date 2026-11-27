@@ -249,6 +249,16 @@ def main() -> None:
     async def post_init(app: Any) -> None:
         from .telegram_transport import build_supervised_monitor_from_settings
 
+        try:  # populate Telegram's "/" command menu
+            from telegram import BotCommand
+
+            from .telegram_control import COMMAND_HELP
+
+            await app.bot.set_my_commands(
+                [BotCommand(name, menu) for name, menu, _ in COMMAND_HELP])
+        except Exception:
+            logger.exception("Could not register the Telegram command menu")
+
         engine_ = holder["engine"]
 
         def alert(healthy: bool, reason: str) -> None:
