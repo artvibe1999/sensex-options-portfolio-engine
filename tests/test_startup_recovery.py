@@ -78,7 +78,7 @@ def test_startup_recovery_preserves_completed_receipt_count_on_poll_failure(tmp_
 
     result = service.recover(session_date=current_ist_date())
 
-    assert not result.ready
+    assert not result.recovery_complete
     assert result.recovered_receipts == 1
     assert result.backfilled_fills == 0
     assert result.reconciliation is None
@@ -98,7 +98,7 @@ def test_startup_recovery_replays_then_backfills_then_reconciles(tmp_path):
 
     result = service.recover(session_date=current_ist_date())
 
-    assert result.ready
+    assert result.recovery_complete
     assert result.recovered_receipts == 1
     assert result.backfilled_fills == 1
     assert result.reconciliation is not None
@@ -114,7 +114,7 @@ def test_startup_recovery_stops_before_broker_poll_if_receipt_replay_fails(tmp_p
 
     result = service.recover(session_date=current_ist_date())
 
-    assert not result.ready
+    assert not result.recovery_complete
     assert result.reconciliation is None
     assert result.reasons == ("Startup recovery failed: RuntimeError",)
     assert ingestion.calls == 1
@@ -126,7 +126,7 @@ def test_startup_recovery_rejects_empty_contract_master(tmp_path):
 
     result = service.recover(session_date=current_ist_date())
 
-    assert not result.ready
+    assert not result.recovery_complete
     assert result.reconciliation is None
     assert "contract master" in result.reasons[0]
     assert history.sessions == [current_ist_date()]
