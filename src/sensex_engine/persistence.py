@@ -165,3 +165,18 @@ class SqliteStore:
                 (outcome, detail[:500], command_id),
             )
             return cursor.rowcount == 1
+
+
+    def command_audit_for(self, command_id: str) -> dict[str, Any] | None:
+        """Return one command audit row for diagnostics."""
+        with self._connection() as connection:
+            row = connection.execute(
+                """
+                SELECT command_id, user_id, chat_id, command, outcome, detail, created_at
+                FROM command_audit WHERE command_id = ?
+                """,
+                (command_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return dict(row)
