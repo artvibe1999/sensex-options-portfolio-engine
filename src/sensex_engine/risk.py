@@ -47,6 +47,8 @@ class RiskEngine:
             return reject("Broker positions/orders are not reconciled")
         if candidate.regime.value in {"transition", "unknown"}:
             return reject("Market regime is uncertain")
+        if candidate.regime.value == "volatility_expansion":
+            return reject("Volatility expansion requires a separately validated strategy")
         if not candidate.is_defined_risk:
             return reject("Unbounded-risk strategy is prohibited")
         if candidate.max_loss <= 0 or estimated_margin <= 0:
