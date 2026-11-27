@@ -39,6 +39,7 @@ class FakeBroker:
         self.key_to_id = {}
         self.submit_calls = []
         self.cancel_calls = []
+        self.cancel_error = False
 
     def submit_order(self, action, *, client_order_key):
         self.submit_calls.append((action, client_order_key))
@@ -61,6 +62,8 @@ class FakeBroker:
 
     def cancel_order(self, broker_order_id, *, client_order_key):
         self.cancel_calls.append((broker_order_id, client_order_key))
+        if self.cancel_error:
+            raise RuntimeError("cancel request timed out")
         order = self.orders[broker_order_id]
         if order["status"] not in {BrokerOrderStatus.OPEN, BrokerOrderStatus.PARTIALLY_FILLED}:
             raise RuntimeError("order is no longer cancellable")
@@ -267,3 +270,26 @@ def test_pending_fill_projection_blocks_any_new_broker_action(tmp_path):
     with pytest.raises(RuntimeError, match="pending receipts"):
         coordinator.execute(make_position(), ExecutionPhase.OPEN)
     assert broker.submit_calls == []
+
+
+
+def test_close_is_blocked_while_opening_order_cancel_is_unconfirmed(tmp_path):
+    coordinator, orders, positions, broker, _ = build_coordinator(
+        tmp_path,
+        [
+            {"fills": [(20, "100.00")]},
+            {"fills": [(10, "101.00")]},
+        ],
+    )
+    position = make_position()
+    broker.cancel_error = True
+    opening = coordinator.execute(position, ExecutionPhase.OPEN)
+    assert opening.blocked
+    assert len(broker.submit_calls) == 2
+    before_close = len(broker.submit_calls)
+
+    closing = coordinator.execute(position, ExecutionPhase.CLOSE)
+    assert closing.blocked
+    assert len(broker.submit_calls) == before_close
+    assert not any(":CLOSE:" in item["order_id"] for item in orders.all_snapshots())
+    assert positions.snapshot(str(position.position_id))["status"] == "ERROR"
