@@ -6,7 +6,7 @@ source. This module never places, modifies, or cancels broker orders.
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -43,6 +43,39 @@ class KiteTradeHistoryIngestor:
         self._orders = orders
         self._positions = positions
         self._ingestion = ingestion
+
+    def poll_current_session(self, *, session_date: date) -> list[FillIngestionResult]:
+        """Backfill all correlated LIVE intents created on the specified IST date.
+
+        All durable snapshots are considered, including canceled/rejected terminal
+        orders, because late broker fills can arrive after a cancel acknowledgement.
+        The explicit date prevents accidentally querying Kite's transient current-day
+        trade book for stale prior-session order IDs.
+        """
+        if not isinstance(session_date, date) or isinstance(session_date, datetime):
+            raise ValueError("session_date must be an explicit calendar date")
+        order_ids: list[str] = []
+        for snapshot in self._orders.all_snapshots():
+            if snapshot.get("mode") != "live" or not snapshot.get("broker_order_id"):
+                continue
+            created_at = snapshot.get("created_at")
+            if not isinstance(created_at, str) or not created_at.strip():
+                raise RuntimeError(
+                    f"Live order {snapshot.get('order_id', 'UNKNOWN')} has no creation timestamp"
+                )
+            try:
+                created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise RuntimeError(
+                    f"Live order {snapshot.get('order_id', 'UNKNOWN')} has an invalid creation timestamp"
+                ) from exc
+            if created.tzinfo is None or created.utcoffset() is None:
+                raise RuntimeError(
+                    f"Live order {snapshot.get('order_id', 'UNKNOWN')} has a naive creation timestamp"
+                )
+            if created.astimezone(IST).date() == session_date:
+                order_ids.append(str(snapshot["order_id"]))
+        return self.poll(order_ids)
 
     def poll(self, order_ids: Iterable[str]) -> list[FillIngestionResult]:
         """Fetch and ingest all individual trades for the selected live intents."""
