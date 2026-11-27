@@ -45,6 +45,7 @@ class KiteOrderExecutionAdapter:
     def submit_order(
         self, action: LegExecutionAction, *, client_order_key: str
     ) -> BrokerOrderReceipt:
+        self._require_authenticated()
         contract = self._current_contract(action)
         price = self._validated_price(action.limit_price, contract.tick_size)
         if action.side not in {"BUY", "SELL"}:
@@ -167,6 +168,10 @@ class KiteOrderExecutionAdapter:
             "Modify request accepted; await broker status and fill reconciliation",
         )
 
+    def _require_authenticated(self) -> None:
+        if not self._market_data.is_authenticated():
+            raise PermissionError("Kite authentication is unavailable; order action refused")
+
     def _current_contract(self, action: LegExecutionAction):
         if action.instrument_token <= 0 or not action.tradingsymbol.strip():
             raise ValueError("A valid SENSEX contract identity is required")
@@ -183,6 +188,7 @@ class KiteOrderExecutionAdapter:
     def _verified_open_order(self, broker_order_id: str, client_order_key: str):
         if not isinstance(broker_order_id, str) or not broker_order_id.strip():
             raise ValueError("Broker order ID is required")
+        self._require_authenticated()
         tag = self.tag_for_client_key(client_order_key)
         self._throttle_order_call()
         history = self._client.order_history(broker_order_id)
