@@ -127,7 +127,10 @@ def generate_directional_verticals(
                     short_leg=short_put,
                     lots=lots,
                     costs_per_lot=costs_per_lot,
-                    rationale="Bull-trend; defined-risk put credit with protective lower-strike put",
+                    rationale=(
+                        "Bull-trend; defined-risk put credit with "
+                        "protective lower-strike put"
+                    ),
                 )
                 if candidate is not None:
                     candidates.append(candidate)
@@ -177,7 +180,10 @@ def generate_directional_verticals(
                     short_leg=short_call,
                     lots=lots,
                     costs_per_lot=costs_per_lot,
-                    rationale="Bear-trend; defined-risk call credit with protective higher-strike call",
+                    rationale=(
+                        "Bear-trend; defined-risk call credit with "
+                        "protective higher-strike call"
+                    ),
                 )
                 if candidate is not None:
                     candidates.append(candidate)
