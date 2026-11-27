@@ -64,19 +64,24 @@ class LiveAccountingRefresh:
         self.account.invalidate_mark()
         data = self.feed.read(now)
         as_of = timestamp(data["as_of"])
-        self.account.set_opening_equity(
-            _decimal(data["opening_equity"], "opening equity"),
-            idempotency_key="statement-opening",
-        )
+        opening = _decimal(data["opening_equity"], "opening equity")
+        if opening <= 0:
+            raise ValueError("Opening equity must be positive")
+        expected_equity = opening
+        flows = []
+        flow_ids = set()
+        results = []
         for flow in data["cash_flows"]:
             occurred = timestamp(flow["occurred_at"])
             if occurred > as_of:
                 raise ValueError("Cash flow is newer than the statement")
-            self.account.record_cash_flow(
-                _decimal(flow["amount"], "cash flow"),
-                direction=flow["direction"], idempotency_key=f"flow:{flow['id']}",
-                occurred_at=occurred, reference=flow["id"],
-            )
+            amount = _decimal(flow["amount"], "cash flow")
+            if (amount <= 0 or flow["direction"] not in {"DEPOSIT", "WITHDRAWAL"}
+                    or not flow["id"] or flow["id"] in flow_ids):
+                raise ValueError("Invalid or duplicate cash flow")
+            flow_ids.add(flow["id"])
+            expected_equity += amount if flow["direction"] == "DEPOSIT" else -amount
+            flows.append((flow, amount, occurred))
         contracts = self.broker.instruments()
         report = BrokerReconciliationService().reconcile_store(
             self.broker, contracts=contracts, position_lifecycle=self.positions,
@@ -122,11 +127,11 @@ class LiveAccountingRefresh:
                     pnl = (price - avg) * units * direction
                     qty -= units
                 basis[index] = qty, avg
-                self.account.record_trade_result(
-                    realized_pnl=pnl, fees=_decimal(charges[fid], "final charges"),
-                    idempotency_key=f"fill:{fid}", occurred_at=at,
-                    broker_trade_ids=(fid,),
-                )
+                charge = _decimal(charges[fid], "final charges")
+                if charge < 0:
+                    raise ValueError("Final charges cannot be negative")
+                expected_equity += pnl - charge
+                results.append((fid, pnl, charge, at))
             if first_open and first_open.astimezone(IST).date() == now.astimezone(IST).date():
                 entries += 1
             if any(qty for qty, _ in basis.values()):
@@ -154,8 +159,31 @@ class LiveAccountingRefresh:
             raise ValueError("Broker equity segment is disabled")
         equity = _decimal(data["net_liquidation_equity"], "statement equity")
         cash = _decimal(data["cash_balance"], "statement cash")
-        if abs(self.account.ledger_equity(unrealized) - equity) > Decimal("1.00"):
+        if abs(expected_equity + unrealized - equity) > Decimal("1.00"):
             raise ValueError("Independent statement disagrees with reconstructed equity")
+        # Do not append unverified financial facts until the full projection balances.
+        existing = self.account._events()
+        expected_keys = {"account:statement-opening"}
+        expected_keys.update(f"account:flow:{flow[\'id\']}" for flow, _, _ in flows)
+        expected_keys.update(f"account:fill:{fid}" for fid, _, _, _ in results)
+        if any(e["idempotency_key"] not in expected_keys for e in existing
+               if e["event_type"] in {
+                   "ACCOUNT_OPENED", "ACCOUNT_CASH_FLOW", "ACCOUNT_TRADE_RESULT",
+               }):
+            raise ValueError("Statement omits previously recorded ledger facts")
+        self.account.set_opening_equity(opening, idempotency_key="statement-opening")
+        for flow, amount, occurred in flows:
+            self.account.record_cash_flow(
+                amount, direction=flow["direction"], idempotency_key=f"flow:{flow['id']}",
+                occurred_at=occurred, reference=flow["id"],
+            )
+        for fid, pnl, charge, at in results:
+            self.account.record_trade_result(
+                realized_pnl=pnl, fees=charge, idempotency_key=f"fill:{fid}",
+                occurred_at=at, broker_trade_ids=(fid,),
+            )
+        if abs(self.account.ledger_equity(unrealized) - equity) > Decimal("1.00"):
+            raise ValueError("Persisted ledger disagrees with independently verified equity")
         self.account.record_reconciled_mark(
             broker_net_equity=equity, unrealized_pnl=unrealized,
             available_margin=_decimal(margin["net"], "available margin"),
