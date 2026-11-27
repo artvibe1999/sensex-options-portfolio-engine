@@ -191,3 +191,9 @@ replay fails, and returns ready only when the final broker reconciliation passes
 The caller must keep entries paused unless `StartupRecoveryResult.ready` is true.
 This service does not schedule itself, enable live mode, or submit/cancel orders;
 runtime wiring, recurring polling, and operational supervision remain required.
+
+
+Safety clarification: the startup result field is named `recovery_complete`, not
+`ready`. A successful reconciliation is not live readiness and does not authorize
+resuming entries. The full `LiveReadinessService`, risk clearance, Telegram
+allowlisting and separate live confirmation remain independent mandatory gates.
