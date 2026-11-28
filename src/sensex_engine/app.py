@@ -59,6 +59,31 @@ class CachedKiteAdapter(KiteReadOnlyAdapter):
             return list(contracts)
 
 
+class AlertGate:
+    """De-duplicate monitor alerts: identical problems at most once per ``repeat_after``.
+
+    A recovery is always delivered (once), and the next problem after a recovery is
+    delivered immediately.
+    """
+
+    def __init__(self, repeat_after_seconds: float = 3600, clock=_time.monotonic) -> None:
+        self._repeat = repeat_after_seconds
+        self._clock = clock
+        self._last: tuple[bool, str] | None = None
+        self._last_at = 0.0
+
+    def should_send(self, healthy: bool, reason: str) -> bool:
+        now = self._clock()
+        key = (healthy, reason)
+        if self._last is not None and self._last[0] == healthy:
+            if healthy:
+                return False  # already reported healthy
+            if key == self._last and now - self._last_at < self._repeat:
+                return False
+        self._last, self._last_at = key, now
+        return True
+
+
 def close_limit_price_provider(adapter: KiteReadOnlyAdapter, *, max_age_seconds: int = 5):
     """Marketable LIMIT price for risk-reducing/entry legs from a fresh quote.
 
@@ -262,15 +287,26 @@ def main() -> None:
 
         engine_ = holder["engine"]
 
+        gate = AlertGate()
+
         def alert(healthy: bool, reason: str) -> None:
             if holder.get("shutting_down"):
                 return  # the shutdown notice below already explains the state
+            if not gate.should_send(healthy, reason):
+                return
             if healthy:
                 engine_.notifier.send(f"Broker monitor OK: {reason}")
             else:
+                hint = ""
+                if "not authenticated" in reason:
+                    hint = (
+                        "\nThe daily Kite token has expired; it refreshes automatically "
+                        "after the first bot's next Kite login."
+                    )
                 engine_.notifier.send(
                     "Broker monitor problem - live gates closed, mode forced to PAPER.\n"
-                    f"Reason: {reason}\nPaper trading continues."
+                    f"Reason: {reason}{hint}\nPaper trading continues. (Repeats of this "
+                    "alert are muted for an hour.)"
                 )
 
         monitor = build_supervised_monitor_from_settings(

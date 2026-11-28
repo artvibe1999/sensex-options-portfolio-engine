@@ -190,3 +190,21 @@ def test_help_lists_every_registered_command_and_start_aliases_help():
         assert f"/{name} - " in text
         assert name in COMMANDS and 0 < len(menu) <= 256 and name.islower()
     assert "start" in COMMANDS
+
+
+def test_alert_gate_mutes_repeated_monitor_problems():
+    from sensex_engine.app import AlertGate
+
+    now = [0.0]
+    gate = AlertGate(repeat_after_seconds=3600, clock=lambda: now[0])
+    assert gate.should_send(False, "not authenticated")
+    for t in (30, 60, 1800):
+        now[0] = t
+        assert not gate.should_send(False, "not authenticated")
+    now[0] = 1900
+    assert gate.should_send(False, "data stale")  # a different problem is reported
+    assert gate.should_send(True, "recovered")
+    assert not gate.should_send(True, "recovered")
+    assert gate.should_send(False, "data stale")  # first problem after recovery
+    now[0] = 1900 + 3601
+    assert gate.should_send(False, "data stale")  # hourly reminder
