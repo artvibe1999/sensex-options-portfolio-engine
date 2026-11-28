@@ -1,12 +1,9 @@
-from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
-from engine_fakes import FAR, NEAR, NOW, FakeKite, bullish_state, chain, make_state
+from engine_fakes import FAR, NEAR, NOW, FakeKite, chain
 
 from sensex_engine import strategies as S
-from sensex_engine.capital_policy import risk_policy
-from sensex_engine.engine import LiveBridge, LiveEntryError
 
 
 def _ctx(state):
@@ -18,7 +15,7 @@ class FakePositions:
         self.legs = legs
 
     def snapshot(self, position_id):
-        return {"position_id": position_id, "strategy_id": S.BULL_CALL, "legs": self.legs}
+        return {"position_id": position_id, "strategy_id": S.LEG_IN_CALL, "legs": self.legs}
 
 
 class FakeCoordinator:
@@ -42,53 +39,6 @@ class FakeAdapter:
 
     def quotes(self, tokens):
         return {t: self._quotes[t] for t in tokens if t in self._quotes}
-
-
-def test_live_bridge_maps_confirmed_fills_and_uses_tier_limits():
-    proposal, why, _ = S.build_bull_call(_ctx(bullish_state()), S.StrategyConfig(), Decimal("9000"))
-    assert proposal is not None, why
-    legs = [
-        {
-            "instrument_token": a.contract.instrument_token,
-            "quantity": 40,
-            "open_average_price": str(p),
-            "side": side.value,
-        }
-        for (a, side), p in zip(proposal.legs, proposal.prices, strict=True)
-    ]
-    coordinator = FakeCoordinator()
-    sizing = SimpleNamespace(risk=None)
-    quotes = {a.contract.instrument_token: a.quote for a, _ in proposal.legs}
-    bridge = LiveBridge(
-        coordinator=coordinator,
-        positions=FakePositions(legs),
-        sizing=sizing,
-        adapter=FakeAdapter(quotes),
-        snapshot_provider=lambda: None,
-    )
-    policy = risk_policy(equity=Decimal("500000"), peak_equity=Decimal("500000"))
-    pid, lots, fills = bridge.open(proposal, lots=2, policy=policy, allocation_pct=Decimal("0.7"))
-    assert lots == 2 and set(fills) == set(quotes)
-    candidate, max_lots, _ = coordinator.sized
-    assert max_lots == 2 and all(leg.lots == 1 for leg in candidate.legs)
-    assert sizing.risk.limits.risk_per_trade_pct == policy.limits.risk_per_trade_pct
-    bridge.coordinator = FakeCoordinator(completed=False)
-    with pytest.raises(LiveEntryError):
-        bridge.open(proposal, lots=1, policy=policy, allocation_pct=Decimal("0.7"))
-
-
-def test_live_bridge_refuses_multi_expiry_structures():
-    proposal, _, _ = S.build_calendar(_ctx(make_state()), S.StrategyConfig(), Decimal("20000"))
-    bridge = LiveBridge(
-        coordinator=FakeCoordinator(),
-        positions=FakePositions([]),
-        sizing=SimpleNamespace(risk=None),
-        adapter=FakeAdapter({}),
-        snapshot_provider=lambda: None,
-    )
-    policy = risk_policy(equity=Decimal("500000"), peak_equity=Decimal("500000"))
-    with pytest.raises(LiveEntryError, match="paper only"):
-        bridge.open(proposal, lots=1, policy=policy, allocation_pct=Decimal("0.7"))
 
 
 def _settings(tmp_path, **kw):

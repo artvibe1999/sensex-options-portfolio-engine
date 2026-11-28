@@ -24,7 +24,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import ROUND_FLOOR, Decimal
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from .arbitration import arbitrate
 from .book import BookLeg, BookPosition, EngineBook, new_position_id
@@ -38,7 +38,7 @@ from .market_state import MarketState, build_market_state, with_options
 from .risk import RiskEngine
 from .scenario import expiry_close, years_between
 from .strategies import (
-    IRON_BUTTERFLY,
+    LEG_IN,
     MarketContext,
     Proposal,
     StrategyConfig,
@@ -61,7 +61,7 @@ class EngineConfig:
     # Hard engine-level entry cutoff, independent of each strategy's own window.
     entry_cutoff: time = time(14, 30)
     max_entries_per_day: int = 3
-    max_margin_utilization: Decimal = Decimal("0.70")
+    max_margin_utilization: Decimal = Decimal("1.0")  # owner: up to 100% of capital
     paper_start_capital: Decimal | None = None
     risk_scale: Decimal = Decimal("1")
     enabled_strategies: frozenset[str] | None = None
@@ -122,8 +122,11 @@ class LiveBridge:
         if len(quotes) != len(tokens):
             raise LiveEntryError("Fresh quotes unavailable for every leg")
         candidate = replace(candidate, data_timestamp=min(q.timestamp for q in quotes.values()))
+        extra = {}
+        if proposal.sizing_risk_per_lot is not None:
+            extra["stop_fraction"] = Decimal(str(proposal.exit_plan.stop_loss_pct))
         report = self.coordinator.execute_sized(
-            candidate, max_lots=lots, allocation_pct=allocation_pct
+            candidate, max_lots=lots, allocation_pct=allocation_pct, **extra
         )
         snap = self.positions.snapshot(report.position_id)
         if not report.completed or snap is None:
@@ -137,7 +140,76 @@ class LiveBridge:
         live_lots = int(snap["legs"][0]["quantity"]) // lot_size
         return report.position_id, live_lots, fills
 
+    def hedge(self, position: BookPosition, contract: Any, quantity: int) -> tuple[str, float]:
+        """Sell the lock strike against the confirmed long (separate durable position)."""
+        assert position.broker_position_id
+        long_leg = position.legs[0]
+        same_series = (
+            contract.right.value == long_leg.right
+            and contract.expiry.isoformat() == long_leg.expiry
+        )
+        further_otm = (
+            contract.strike > Decimal(str(long_leg.strike))
+            if long_leg.right == "CE"
+            else contract.strike < Decimal(str(long_leg.strike))
+        )
+        if not same_series or not further_otm or quantity != long_leg.quantity:
+            raise LiveEntryError("Hedge strike does not protect-match the long leg")
+        hedge = Position(
+            uuid4(),
+            position.strategy_id,
+            (OptionLeg(contract, Side.SELL, quantity // contract.lot_size),),
+            TradingMode.LIVE,
+            datetime.now(UTC),
+        )
+        report = self.coordinator.execute_protected_short(
+            hedge, protecting_position_id=position.broker_position_id
+        )
+        snap = self.positions.snapshot(report.position_id)
+        if not report.completed or snap is None:
+            raise LiveEntryError(
+                f"Hedge incomplete: {report.reason}; residual={report.residual_exposure}"
+            )
+        return report.position_id, float(snap["legs"][0]["open_average_price"])
+
+    def _close_one(self, broker_position_id: str, contracts: dict[int, Any]) -> dict[int, float]:
+        snap = self.positions.snapshot(broker_position_id)
+        if snap is None:
+            raise RuntimeError("Durable live position is unavailable")
+        legs = []
+        for leg in snap["legs"]:
+            contract = contracts.get(int(leg["instrument_token"]))
+            if contract is None:
+                raise RuntimeError(f"Contract {leg['tradingsymbol']} missing from master")
+            legs.append(
+                OptionLeg(contract, Side(leg["side"]), int(leg["quantity"]) // contract.lot_size)
+            )
+        live_position = Position(
+            UUID(broker_position_id),
+            snap["strategy_id"],
+            tuple(legs),
+            TradingMode.LIVE,
+            datetime.now(UTC),
+        )
+        from .execution import ExecutionPhase
+
+        report = self.coordinator.execute(live_position, ExecutionPhase.CLOSE)
+        final = self.positions.snapshot(broker_position_id)
+        if not report.completed or final is None:
+            raise RuntimeError(
+                f"Live close incomplete: {report.reason}; residual={report.residual_exposure}"
+            )
+        return {
+            int(leg["instrument_token"]): float(leg["close_average_price"]) for leg in final["legs"]
+        }
+
     def close(self, position: BookPosition, contracts: dict[int, Any]) -> dict[int, float]:
+        hedge_id = position.meta.get("hedge_broker_position_id")
+        if hedge_id:  # leg-in lock: buy back the short first, then sell the long
+            prices = self._close_one(str(hedge_id), contracts)
+            assert position.broker_position_id
+            prices.update(self._close_one(position.broker_position_id, contracts))
+            return prices
         assert position.broker_position_id
         snap = self.positions.snapshot(position.broker_position_id)
         if snap is None:
@@ -370,6 +442,10 @@ class Engine:
                 base = Decimal(base_raw)
             start = base + self.book.realized_total("paper")
         else:
+            # LIVE capital is always the Zerodha account's own funds (owner decision):
+            # start-of-day balance (opening balance + intraday pay-in), which does not shrink
+            # when this engine's positions use margin. Deployable margin is additionally
+            # capped by the broker's current available funds (see portfolio()).
             start = self._kite_start_of_day_funds()
         return Decimal(self.book.start_day(mode, today, start)["start_equity"])
 
@@ -410,7 +486,7 @@ class Engine:
         snapshot = PortfolioSnapshot(
             net_liquidation_equity=equity,
             available_margin=margin_room,
-            open_max_loss=sum((p.max_loss + p.entry_costs for p in open_positions), Decimal("0")),
+            open_max_loss=sum((self._open_risk(p) for p in open_positions), Decimal("0")),
             daily_realized_pnl=realized_today,
             daily_unrealized_pnl=unrealized,
             weekly_drawdown_pct=max(Decimal("0"), (week_ref - equity) / week_ref),
@@ -423,6 +499,15 @@ class Engine:
         )
         self.last_policy = policy
         return snapshot, policy
+
+    @staticmethod
+    def _open_risk(p: BookPosition) -> Decimal:
+        """Risk an open position still carries (leg-in: stop risk, zero once locked)."""
+        if p.exit_plan.get("kind") == "leg_in":
+            if p.meta.get("stage") == "locked":
+                return max(p.max_loss, Decimal("0"))
+            return Decimal(str(p.meta.get("managed_risk", p.max_loss + p.entry_costs)))
+        return p.max_loss + p.entry_costs
 
     def live_snapshot(self) -> PortfolioSnapshot | None:
         try:
@@ -501,6 +586,10 @@ class Engine:
                 pnl = (p.unrealized(marks) or 0.0) - float(self._exit_costs(p, marks))
                 p.meta["last_pnl"] = round(pnl, 2)
                 p.meta["peak_pnl"] = max(float(p.meta.get("peak_pnl", pnl)), pnl)
+                if p.exit_plan.get("kind") == "leg_in":
+                    self.book.update_meta(p.id, p.meta)
+                    self._manage_leg_in(p, snap, state, new_bar, now, marks)
+                    continue
                 shorts = {
                     leg.instrument_token: deltas[leg.instrument_token]
                     for leg in p.legs
@@ -518,6 +607,124 @@ class Engine:
                 self.book.update_meta(p.id, p.meta)
                 if decision is not None:
                     self._close(p, snap, decision.reason, now)
+
+    def _manage_leg_in(
+        self,
+        p: BookPosition,
+        snap: FeedSnapshot,
+        state: MarketState | None,
+        new_bar: bool,
+        now: datetime,
+        marks: dict[int, float],
+    ) -> None:
+        """Leg-in lock: stop / EMA21 exit / lock hedge at +trigger / locked-spread target."""
+        plan = p.exit_plan
+        long_leg = p.legs[0]
+        bid = marks[long_leg.instrument_token]
+        entry = long_leg.entry_price
+        cutoff = now.astimezone(IST).time() >= self.config.square_off
+        if p.meta.get("stage") == "locked":
+            short = p.legs[1]
+            value = bid - marks[short.instrument_token]
+            width = abs(short.strike - long_leg.strike)
+            if value >= float(plan["lock_target_width"]) * width:
+                self._close(
+                    p, snap, f"locked spread reached {plan['lock_target_width']:.0%} of width", now
+                )
+            elif cutoff:
+                self._close(p, snap, f"intraday square-off at {self.config.square_off:%H:%M}", now)
+            return
+        if bid <= entry * (1 - float(plan["stop_loss_pct"])):
+            self._close(p, snap, f"premium stop -{plan['stop_loss_pct']:.0%}", now)
+            return
+        if cutoff:
+            self._close(p, snap, f"intraday square-off at {self.config.square_off:%H:%M}", now)
+            return
+        if new_bar and state is not None:
+            bullish = plan.get("alignment") == "bullish"
+            if (bullish and state.close < state.ema21) or (
+                not bullish and state.close > state.ema21
+            ):
+                self._close(p, snap, "index closed back through EMA21", now)
+                return
+        if bid >= entry * (1 + float(plan["hedge_trigger"])):
+            self._lock_hedge(p, snap, now, entry)
+
+    def _lock_hedge(self, p: BookPosition, snap: FeedSnapshot, now: datetime, entry: float) -> None:
+        """Sell the furthest-OTM same-series strike whose bid >= the long's entry price."""
+        long_leg = p.legs[0]
+        long_contract = self.feed.by_token.get(long_leg.instrument_token)
+        if long_contract is None:
+            return
+        best = None
+        for contract in self.feed.contracts:
+            if (
+                contract.expiry != long_contract.expiry
+                or contract.right != long_contract.right
+                or contract.instrument_token == long_contract.instrument_token
+            ):
+                continue
+            further = (
+                contract.strike > long_contract.strike
+                if contract.right.value == "CE"
+                else contract.strike < long_contract.strike
+            )
+            quote = snap.quotes.get(contract.instrument_token)
+            if (
+                not further
+                or quote is None
+                or float(quote.bid) < entry
+                or quote.bid_quantity < long_leg.quantity
+            ):
+                continue
+            distance = abs(contract.strike - long_contract.strike)
+            if best is None or distance > best[0]:
+                best = (distance, contract, quote)
+        if best is None:
+            return  # no strike locks yet; try again next cycle
+        _, contract, quote = best
+        price = float(quote.bid)
+        meta = dict(p.meta)
+        if p.mode == "live":
+            if self.live is None:
+                return
+            try:
+                hedge_id, price = self.live.hedge(p, contract, long_leg.quantity)
+            except Exception as exc:
+                self.notifier.send(
+                    f"[LIVE] HEDGE NOT PLACED for {p.id}: {exc}. Long leg "
+                    "remains under its stop; check Kite."
+                )
+                return
+            meta["hedge_broker_position_id"] = hedge_id
+        leg = BookLeg(
+            contract.instrument_token,
+            contract.tradingsymbol,
+            contract.right.value,
+            float(contract.strike),
+            contract.expiry.isoformat(),
+            "SELL",
+            long_leg.quantity,
+            price,
+            0.0,
+        )
+        costs = leg_charges(
+            side="SELL",
+            price=Decimal(str(price)),
+            quantity=long_leg.quantity,
+            schedule=self.config.charges,
+        ).total
+        meta.update(stage="locked", locked_at=now.isoformat())
+        locked = self.book.add_hedge_leg(p.id, leg=leg, entry_costs=costs, meta=meta)
+        from .reports import name, rs
+
+        self.notifier.send(
+            f"[{p.mode.upper()}] HEDGED {name(p.strategy_id)} - profit locked\n"
+            f"Sold {contract.tradingsymbol} @ {price} against "
+            f"{long_leg.tradingsymbol} (bought @ {long_leg.entry_price})\n"
+            f"Worst case now: {rs(-locked.max_loss) if locked.max_loss else 'Rs 0'} "
+            f"(before charges) | Max profit: {rs(locked.max_profit)}"
+        )
 
     def _close(self, p: BookPosition, snap: FeedSnapshot, reason: str, now: datetime) -> None:
         try:
@@ -564,12 +771,16 @@ class Engine:
 
         with self._lock:
             if not self.MIN_PAPER_CAPITAL <= amount <= self.MAX_PAPER_CAPITAL:
-                return (f"Paper capital must be between {rs(self.MIN_PAPER_CAPITAL)} and "
-                        f"{rs(self.MAX_PAPER_CAPITAL)}.")
+                return (
+                    f"Paper capital must be between {rs(self.MIN_PAPER_CAPITAL)} and "
+                    f"{rs(self.MAX_PAPER_CAPITAL)}."
+                )
             open_paper = self.book.open_positions("paper")
             if open_paper:
-                return (f"Not changed: {len(open_paper)} paper position(s) are open. Close them "
-                        "(/positions, /close <id> confirm) or wait for the 15:10 square-off.")
+                return (
+                    f"Not changed: {len(open_paper)} paper position(s) are open. Close them "
+                    "(/positions, /close <id> confirm) or wait for the 15:10 square-off."
+                )
             now = self.clock()
             today = now.astimezone(IST).date()
             previous = self.book.get_state("paper_base_capital")
@@ -577,19 +788,24 @@ class Engine:
             base = amount - self.book.realized_total("paper")
             self.book.set_state("paper_base_capital", str(base))
             self.book.reset_equity_reference("paper", today, amount)
-            self.book.log_decision("paper_capital_set", {
-                "amount": str(amount), "previous_base": previous, "user": user_id}, now)
+            self.book.log_decision(
+                "paper_capital_set",
+                {"amount": str(amount), "previous_base": previous, "user": user_id},
+                now,
+            )
             policy = self._policy(amount, amount)
             self.last_policy = policy if self.mode == "paper" else self.last_policy
             self.notifier.send(f"[PAPER] Capital set to {rs(amount, 2)} by operator.")
-            return "\n".join([
-                f"Paper capital set to {rs(amount, 2)}",
-                "Drawdown and daily-loss references restart from this amount; "
-                "trade history is kept.",
-                "",
-                "New risk policy",
-                *policy_lines(policy),
-            ])
+            return "\n".join(
+                [
+                    f"Paper capital set to {rs(amount, 2)}",
+                    "Drawdown and daily-loss references restart from this amount; "
+                    "trade history is kept.",
+                    "",
+                    "New risk policy",
+                    *policy_lines(policy),
+                ]
+            )
 
     def close_all(self, mode: str, reason: str) -> int:
         """Operator-initiated controlled close (paper; live goes through emergency close-all)."""
@@ -634,7 +850,14 @@ class Engine:
         today = now.astimezone(IST).date()
         portfolio, policy = self.portfolio(mode, now)
         row = self.book.equity_day(mode, today) or {}
-        ctx = MarketContext(state=state, near=near, far=far, oi=snap.oi(), now=now)
+        ctx = MarketContext(
+            state=state,
+            near=near,
+            far=far,
+            oi=snap.oi(),
+            now=now,
+            equity=portfolio.net_liquidation_equity,
+        )
         budget = policy.max_trade_risk
         evaluations = evaluate_all(
             ctx,
@@ -692,6 +915,8 @@ class Engine:
         try:
             return self.feed.adapter.basket_margin(legs, prices), "broker basket margin"
         except Exception as exc:
+            if proposal.strategy_id in LEG_IN:  # a bought option needs only its premium
+                return proposal.net_debit_per_lot, "premium (long option)"
             estimate = max(proposal.max_loss_per_lot, abs(proposal.net_debit_per_lot)) * Decimal(
                 "1.25"
             )
@@ -702,8 +927,6 @@ class Engine:
     ) -> tuple[int, Decimal, str]:
         risk_lot = proposal.risk_per_lot
         budget = policy.max_trade_risk
-        if proposal.strategy_id == IRON_BUTTERFLY:
-            budget *= self.config.strategy.ib_risk_fraction
         aggregate_room = policy.max_aggregate_risk - portfolio.open_max_loss
         by_risk = int((min(budget, aggregate_room) / risk_lot).to_integral_value(ROUND_FLOOR))
         margin_lot, margin_source = self._margin_per_lot(proposal)
@@ -715,13 +938,15 @@ class Engine:
         )
         by_freeze = self.config.freeze_quantity // proposal.lot_size
         lots = max(0, min(by_risk, by_margin, depth, by_freeze))
+        if proposal.strategy_id in LEG_IN:
+            lots = min(lots, self.config.strategy.leg_in_max_lots)
         detail = (
             f"risk {by_risk}, margin {by_margin} ({margin_source} Rs{margin_lot:,.0f}/lot), "
             f"depth {depth}, freeze {by_freeze}"
         )
         risk = RiskEngine(policy.limits)
         while lots >= 1:
-            candidate = proposal.to_candidate(lots)
+            candidate = proposal.to_risk_candidate(lots)
             decision = risk.evaluate(
                 candidate,
                 portfolio,
@@ -838,6 +1063,8 @@ class Engine:
                 "rationale": proposal.rationale,
                 "policy": policy.describe(),
                 "multi_expiry": proposal.multi_expiry,
+                "stage": "single" if proposal.strategy_id in LEG_IN else None,
+                "managed_risk": str(proposal.risk_per_lot * lots),
             },
             broker_position_id=broker_position_id,
         )

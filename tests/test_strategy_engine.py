@@ -9,14 +9,12 @@ from engine_fakes import (
     NOW,
     SPOT,
     FakeKite,
-    bullish_state,
     chain,
     history,
     make_state,
 )
 
 from sensex_engine import strategies as S
-from sensex_engine.arbitration import arbitrate
 from sensex_engine.book import EngineBook
 from sensex_engine.capital_policy import risk_policy, tier_for
 from sensex_engine.charges import leg_charges, round_trip_estimate
@@ -115,38 +113,13 @@ def test_capital_tiers_scale_risk_with_equity():
 def test_charges_include_stt_on_sell_and_stamp_on_buy():
     sell = leg_charges(side="SELL", price=Decimal("100"), quantity=20)
     buy = leg_charges(side="BUY", price=Decimal("100"), quantity=20)
-    assert sell.stt == Decimal("2.00") and buy.stt == 0
+    assert sell.stt == Decimal("3.00") and buy.stt == 0
     assert buy.stamp > 0 and sell.stamp == 0
     assert sell.brokerage == Decimal("20.00")
     assert round_trip_estimate([("BUY", Decimal("100"), 20)]) == buy.total + sell.total
 
 
 # ------------------------------------------------------------------ strategies
-def test_bull_call_builder_selects_delta_band_strikes_within_budget():
-    state = bullish_state()
-    proposal, why, _ = S.build_bull_call(ctx(state), S.StrategyConfig(), Decimal("8000"))
-    assert proposal is not None, why
-    (long_leg, ls), (short_leg, ss) = proposal.legs
-    assert ls.value == "BUY" and ss.value == "SELL"
-    assert 0.50 <= float(long_leg.delta) <= 0.70 and 0.20 <= float(short_leg.delta) <= 0.40
-    assert short_leg.contract.strike > long_leg.contract.strike
-    assert proposal.risk_per_lot <= Decimal("8000")
-    assert proposal.max_profit_per_lot / proposal.max_loss_per_lot >= Decimal("1.1")
-    assert proposal.prices[0] == long_leg.quote.ask and proposal.prices[1] == short_leg.quote.bid
-    assert set(proposal.components) == set("PLVGORC") and 0 < proposal.score <= 100
-
-
-def test_builder_rejects_when_one_lot_exceeds_capital_budget():
-    proposal, why, rejected = S.build_bull_call(
-        ctx(bullish_state()), S.StrategyConfig(), Decimal("200")
-    )
-    assert proposal is None and rejected > 0 and "budget" in why
-
-
-def test_bull_call_rejects_resistance_inside_reward_distance():
-    state = bullish_state(prev_day_high=SPOT + 60)
-    proposal, why, _ = S.build_bull_call(ctx(state), S.StrategyConfig(), Decimal("9000"))
-    assert proposal is None and "resistance" in why
 
 
 def test_credit_spread_short_strike_must_clear_support():
@@ -161,74 +134,7 @@ def test_credit_spread_short_strike_must_clear_support():
         assert why
 
 
-def test_iron_condor_shorts_outside_range_and_expected_move():
-    state = make_state(range_low=SPOT - 150, range_high=SPOT + 150)
-    proposal, why, _ = S.build_iron_condor(
-        ctx(state), S.StrategyConfig(min_credit_to_width=0.05), Decimal("8000")
-    )
-    assert proposal is not None, why
-    em = state.expected_move()
-    shorts = [a for a, side in proposal.legs if side.value == "SELL"]
-    longs = [a for a, side in proposal.legs if side.value == "BUY"]
-    assert len(shorts) == 2 and len(longs) == 2
-    for a in shorts:
-        if a.contract.right.value == "PE":
-            assert float(a.contract.strike) < SPOT - em
-        else:
-            assert float(a.contract.strike) > SPOT + em
-    assert proposal.net_debit_per_lot < 0 and proposal.max_profit_per_lot is not None
-
-
-def test_long_iron_butterfly_is_debit_with_capped_loss():
-    proposal, why, _ = S.build_long_iron_butterfly(
-        ctx(make_state()), S.StrategyConfig(min_long_ib_rr=0.2, min_score=0), Decimal("20000")
-    )
-    assert proposal is not None, why
-    assert proposal.net_debit_per_lot > 0
-    assert proposal.max_loss_per_lot == pytest.approx(proposal.net_debit_per_lot, rel=1e-6)
-
-
-def test_calendar_uses_two_expiries_and_bounds_loss_by_debit():
-    proposal, why, _ = S.build_calendar(ctx(make_state()), S.StrategyConfig(), Decimal("20000"))
-    assert proposal is not None, why
-    assert proposal.multi_expiry
-    expiries = {a.contract.expiry for a, _ in proposal.legs}
-    assert expiries == {NEAR, FAR}
-    assert proposal.max_loss_per_lot == proposal.net_debit_per_lot > 0
-    missing, why, _ = S.build_calendar(
-        ctx(make_state(), far=False), S.StrategyConfig(), Decimal("20000")
-    )
-    assert missing is None and "back-month" in why
-
-
-def test_setup_checks_report_every_failed_rule():
-    checks = S.setup_bull_call(make_state(), NOW)
-    failed = {c.name for c in checks if not c.passed}
-    assert "HH-HL structure" in failed and "RSI > 55" in failed
-    passed = S.setup_bull_call(bullish_state(), NOW)
-    assert all(c.passed for c in passed), [c for c in passed if not c.passed]
-    no_vwap = S.setup_bull_call(bullish_state(vwap=None, future_close=None), NOW)
-    assert any(c.name == "VWAP" and not c.passed for c in no_vwap)
-    late = S.setup_bull_call(bullish_state(), NOW.replace(hour=14, minute=45))
-    assert any(c.name == "session window" and not c.passed for c in late)
-
-
-def test_evaluate_all_returns_priority_ordered_diagnostics():
-    evaluations = S.evaluate_all(ctx(bullish_state()), risk_budget=Decimal("8000"))
-    assert [e.strategy_id for e in evaluations] == list(S.PRIORITY)
-    assert evaluations[0].eligible, evaluations[0].summary()
-    assert all(e.summary() for e in evaluations)
-
-
 # ----------------------------------------------------------------- arbitration
-def test_arbitration_priority_and_portfolio_conflicts():
-    evaluations = S.evaluate_all(ctx(bullish_state()), risk_budget=Decimal("8000"))
-    chosen = arbitrate(evaluations, open_strategies=[], max_concurrent=3)
-    assert chosen.selected is not None and chosen.selected.strategy_id == S.BULL_CALL
-    blocked = arbitrate(evaluations, open_strategies=[S.BEAR_PUT], max_concurrent=3)
-    assert blocked.selected is None and "conflicts" in blocked.considered[0]
-    full = arbitrate(evaluations, open_strategies=[S.IRON_CONDOR, S.CALENDAR], max_concurrent=2)
-    assert full.selected is None and "max concurrent" in full.reason
 
 
 # ----------------------------------------------------------------------- exits
@@ -320,18 +226,22 @@ def _engine(tmp_path, fk, clock, **cfg):
 
 
 def test_engine_paper_cycle_enters_sizes_and_squares_off(tmp_path, monkeypatch):
-    monkeypatch.setitem(S.SETUPS, S.BULL_CALL, lambda state, now: [])
+    monkeypatch.setitem(S.SETUPS, S.LEG_IN_CALL, lambda state, now: [])
     clock = Clock(NOW)
     fk = FakeKite(funds=400000)
-    engine, book, alerts = _engine(tmp_path, fk, clock, enabled_strategies=frozenset({S.BULL_CALL}))
+    engine, book, alerts = _engine(
+        tmp_path, fk, clock, enabled_strategies=frozenset({S.LEG_IN_CALL})
+    )
     engine.cycle()
     assert engine.last_error == "", engine.last_error
     positions = book.open_positions("paper")
     assert len(positions) == 1, engine.last_arbitration
     p = positions[0]
-    assert p.strategy_id == S.BULL_CALL and p.lots >= 1
+    assert p.strategy_id == S.LEG_IN_CALL and p.lots >= 1
     policy = risk_policy(equity=Decimal("400000"), peak_equity=Decimal("400000"))
-    assert p.max_loss + p.entry_costs <= policy.max_trade_risk
+    # Leg-in is stop-managed: the stop risk is budgeted, the premium must fit capital.
+    assert Decimal(p.meta["managed_risk"]) <= policy.max_trade_risk
+    assert p.entry_net <= Decimal("400000") and p.meta["stage"] == "single"
     assert book.get_state("paper_base_capital") == "400000"
     assert any("ENTRY" in a for a in alerts)
     # Same bar again: no duplicate entry.
@@ -355,9 +265,9 @@ def test_engine_paper_cycle_enters_sizes_and_squares_off(tmp_path, monkeypatch):
 
 
 def test_engine_does_not_trade_when_budget_cannot_fund_a_lot(tmp_path, monkeypatch):
-    monkeypatch.setitem(S.SETUPS, S.BULL_CALL, lambda state, now: [])
+    monkeypatch.setitem(S.SETUPS, S.LEG_IN_CALL, lambda state, now: [])
     engine, book, _ = _engine(
-        tmp_path, FakeKite(funds=2000), Clock(NOW), enabled_strategies=frozenset({S.BULL_CALL})
+        tmp_path, FakeKite(funds=2000), Clock(NOW), enabled_strategies=frozenset({S.LEG_IN_CALL})
     )
     engine.cycle()
     assert not book.open_positions()
@@ -365,26 +275,30 @@ def test_engine_does_not_trade_when_budget_cannot_fund_a_lot(tmp_path, monkeypat
 
 
 def test_engine_respects_operator_pause_and_stale_market(tmp_path, monkeypatch):
-    monkeypatch.setitem(S.SETUPS, S.BULL_CALL, lambda state, now: [])
+    monkeypatch.setitem(S.SETUPS, S.LEG_IN_CALL, lambda state, now: [])
     fk = FakeKite(funds=400000)
-    engine, book, _ = _engine(tmp_path, fk, Clock(NOW), enabled_strategies=frozenset({S.BULL_CALL}))
+    engine, book, _ = _engine(
+        tmp_path, fk, Clock(NOW), enabled_strategies=frozenset({S.LEG_IN_CALL})
+    )
     engine.user_paused = True
     engine.cycle()
     assert not book.open_positions() and "paused" in engine.last_arbitration
     stale = FakeKite(funds=400000)
     stale.now = NOW - timedelta(minutes=10)
     engine2, book2, _ = _engine(
-        tmp_path / "b", stale, Clock(NOW), enabled_strategies=frozenset({S.BULL_CALL})
+        tmp_path / "b", stale, Clock(NOW), enabled_strategies=frozenset({S.LEG_IN_CALL})
     )
     engine2.cycle()
     assert not book2.open_positions() and "old" in engine2.last_error
 
 
 def test_engine_daily_loss_stop_closes_everything_and_halts(tmp_path, monkeypatch):
-    monkeypatch.setitem(S.SETUPS, S.BULL_CALL, lambda state, now: [])
+    monkeypatch.setitem(S.SETUPS, S.LEG_IN_CALL, lambda state, now: [])
     clock = Clock(NOW)
     fk = FakeKite(funds=400000)
-    engine, book, alerts = _engine(tmp_path, fk, clock, enabled_strategies=frozenset({S.BULL_CALL}))
+    engine, book, alerts = _engine(
+        tmp_path, fk, clock, enabled_strategies=frozenset({S.LEG_IN_CALL})
+    )
     engine.cycle()
     assert book.open_positions("paper")
     # Crash the market 3% within the session: spread loses most of its value.
@@ -414,17 +328,23 @@ def test_engine_outside_session_is_idle(tmp_path):
 
 
 def test_status_and_report_texts(tmp_path, monkeypatch):
-    monkeypatch.setitem(S.SETUPS, S.BULL_CALL, lambda state, now: [])
+    monkeypatch.setitem(S.SETUPS, S.LEG_IN_CALL, lambda state, now: [])
     engine, _, _ = _engine(
-        tmp_path, FakeKite(funds=400000), Clock(NOW), enabled_strategies=frozenset({S.BULL_CALL})
+        tmp_path, FakeKite(funds=400000), Clock(NOW), enabled_strategies=frozenset({S.LEG_IN_CALL})
     )
     assert "No strategy evaluation" in engine.strategies_text()
     engine.cycle()
     assert "SENSEX" in engine.status_text() and "Capital tier: medium" in engine.status_text()
-    assert "1. Bull call spread: ELIGIBLE" in engine.strategies_text()
+    assert "1. Buy call, lock with hedge: ELIGIBLE" in engine.strategies_text()
     capital = engine.capital_text()
-    for label in ("PAPER account", "  Equity: Rs ", "  Start of day: ", "  Risk per trade: ",
-                  "  Daily loss stop: ", "  Capital tier: medium"):
+    for label in (
+        "PAPER account",
+        "  Equity: Rs ",
+        "  Start of day: ",
+        "  Risk per trade: ",
+        "  Daily loss stop: ",
+        "  Capital tier: medium",
+    ):
         assert label in capital, capital
     risk = engine.risk_text()
     assert "Risk and limits" in risk and "  Week drawdown: " in risk

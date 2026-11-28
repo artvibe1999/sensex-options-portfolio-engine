@@ -28,8 +28,17 @@ class EntrySizingService:
     def approve(
         self, candidate: StrategyCandidate, *, max_lots: int,
         allocation_pct: Decimal, now: datetime | None = None,
+        stop_fraction: Decimal | None = None,
     ) -> tuple[StrategyCandidate, dict[int, Decimal]]:
+        """Size and approve. ``stop_fraction`` (single long option only) budgets the
+        premium-stop risk instead of the full premium; the full premium is still bounded
+        by margin/capital checks."""
         now = now or datetime.now(UTC)
+        if stop_fraction is not None and (
+            len(candidate.legs) != 1 or candidate.legs[0].side is not Side.BUY
+            or not Decimal("0") < stop_fraction < Decimal("1")
+        ):
+            raise ValueError("Stop-managed sizing applies to a single long option only")
         if not timedelta(0) <= now - candidate.data_timestamp <= timedelta(seconds=2):
             raise ValueError("Strategy signal is stale or future-dated")
         if (type(max_lots) is not int or max_lots < 1
@@ -85,7 +94,7 @@ class EntrySizingService:
         lots = affordable_lots(
             risk_budget=min(budget.max_trade_risk, family_remaining,
                             budget.max_aggregate_risk - snapshot.open_max_loss),
-            max_loss_per_lot=one.max_loss,
+            max_loss_per_lot=one.max_loss * (stop_fraction or Decimal("1")),
             estimated_cost_per_lot=candidate.estimated_costs,
             available_margin=cap, margin_per_lot=margin_one, max_lots=liquidity_lots,
         )
@@ -100,8 +109,10 @@ class EntrySizingService:
             )
             margin = self.broker.basket_margin(legs, prices)
             fresh = datetime.now(UTC) - min(quote_times) <= timedelta(seconds=2)
+            risk_view = (scaled if stop_fraction is None
+                         else replace(scaled, max_loss=scaled.max_loss * stop_fraction))
             decision = self.risk.evaluate(
-                scaled, snapshot, estimated_margin=margin, data_is_fresh=fresh,
+                risk_view, snapshot, estimated_margin=margin, data_is_fresh=fresh,
                 contracts_are_current=True, broker_reconciled=True,
             )
             if decision.approved and margin <= cap:

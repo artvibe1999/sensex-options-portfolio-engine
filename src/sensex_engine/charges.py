@@ -10,14 +10,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from decimal import ROUND_HALF_UP, Decimal
 
-CHARGES_VERSION = "zerodha-bse-options-2026-11"
+CHARGES_VERSION = "zerodha-bse-options-2026-11b"
 PAISE = Decimal("0.01")
 
 
 @dataclass(frozen=True)
 class ChargeSchedule:
     brokerage_per_order: Decimal = Decimal("20")
-    stt_sell_pct: Decimal = Decimal("0.001")  # 0.1% of sell premium
+    stt_sell_pct: Decimal = Decimal("0.0015")  # 0.15% of sell premium (zerodha.com/charges)
     exchange_txn_pct: Decimal = Decimal("0.000325")  # BSE SENSEX options, of premium
     sebi_per_crore: Decimal = Decimal("10")
     stamp_buy_pct: Decimal = Decimal("0.00003")  # 0.003% of buy premium

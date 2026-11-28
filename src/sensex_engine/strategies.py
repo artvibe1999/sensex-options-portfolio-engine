@@ -29,49 +29,35 @@ from .option_chain import OptionAnalytics, OptionChainSnapshot
 from .payoff import calculate_expiry_payoff
 from .scenario import ScenarioLeg, expiry_close, expiry_probability, stress, years_between
 
-STRATEGY_VERSION = "catalogue-v1"
+STRATEGY_VERSION = "catalogue-v2-winners"
 
-BULL_CALL = "SENSEX_BULL_CALL_DEBIT"
-BEAR_PUT = "SENSEX_BEAR_PUT_DEBIT"
+# 2026-11-28 owner decision: keep only families with positive after-charge results in the
+# archive replays (docs/engine.md "Strategy selection evidence"); bull call / bear put debit
+# spreads lost money and iron condor / iron butterfly / calendar / long iron butterfly never
+# qualified (no evidence), so they were removed.
+LEG_IN_CALL = "SENSEX_LEGIN_LOCK_CALL"
+LEG_IN_PUT = "SENSEX_LEGIN_LOCK_PUT"
 BULL_PUT = "SENSEX_BULL_PUT_CREDIT"
 BEAR_CALL = "SENSEX_BEAR_CALL_CREDIT"
-IRON_CONDOR = "SENSEX_IRON_CONDOR"
-IRON_BUTTERFLY = "SENSEX_IRON_BUTTERFLY"
-CALENDAR = "SENSEX_CALENDAR_DIAGONAL"
-LONG_IRON_BUTTERFLY = "SENSEX_LONG_IRON_BUTTERFLY"
+LEG_IN = frozenset({LEG_IN_CALL, LEG_IN_PUT})
 
-# Requirement section 9: arbitration priority (not a profitability ranking).
-PRIORITY = (
-    BULL_CALL,
-    BEAR_PUT,
-    BULL_PUT,
-    BEAR_CALL,
-    IRON_CONDOR,
-    IRON_BUTTERFLY,
-    CALENDAR,
-    LONG_IRON_BUTTERFLY,
-)
+PRIORITY = (LEG_IN_CALL, LEG_IN_PUT, BULL_PUT, BEAR_CALL)
 DIRECTION = {
-    BULL_CALL: "bullish",
+    LEG_IN_CALL: "bullish",
+    LEG_IN_PUT: "bearish",
     BULL_PUT: "bullish",
-    BEAR_PUT: "bearish",
     BEAR_CALL: "bearish",
-    IRON_CONDOR: "neutral",
-    IRON_BUTTERFLY: "neutral",
-    CALENDAR: "neutral",
-    LONG_IRON_BUTTERFLY: "volatility",
 }
-# Entry windows (IST). Opening 15 minutes are assessment only; no entries after 14:30.
+# Entry windows (IST). No entries in the opening 20 minutes; engine cutoff 14:30.
 WINDOWS = {
-    BULL_CALL: (time(9, 30), time(14, 30)),
-    BEAR_PUT: (time(9, 30), time(14, 30)),
+    LEG_IN_CALL: (time(9, 35), time(13, 30)),
+    LEG_IN_PUT: (time(9, 35), time(13, 30)),
     BULL_PUT: (time(9, 45), time(14, 30)),
     BEAR_CALL: (time(9, 45), time(14, 30)),
-    IRON_CONDOR: (time(10, 30), time(14, 0)),
-    IRON_BUTTERFLY: (time(10, 30), time(14, 0)),
-    CALENDAR: (time(10, 30), time(14, 0)),
-    LONG_IRON_BUTTERFLY: (time(9, 45), time(14, 0)),
 }
+# Credit spreads only showed positive after-charge results from Rs 2L of capital
+# (charges dominated below that).
+MIN_EQUITY = {BULL_PUT: Decimal("200000"), BEAR_CALL: Decimal("200000")}
 WEIGHTS = {"P": 0.25, "L": 0.20, "V": 0.15, "G": 0.15, "O": 0.10, "R": 0.10, "C": 0.05}
 
 
@@ -97,6 +83,9 @@ class ExitPlan:
     alignment: str | None = None  # "bullish" | "bearish": exit on VWAP+EMA reversal
     range_low: float | None = None  # neutral: exit on close outside range
     range_high: float | None = None
+    kind: str = "standard"  # "standard" | "leg_in"
+    hedge_trigger: float | None = None  # leg-in: lock when long premium is up this fraction
+    lock_target_width: float | None = None  # leg-in: exit locked spread at this x width
 
 
 @dataclass(frozen=True)
@@ -120,15 +109,35 @@ class Proposal:
     rationale: str
     data_timestamp: datetime
     multi_expiry: bool = False
+    # Leg-in: risk used for sizing is the premium stop (+ charges), not the full premium.
+    sizing_risk_per_lot: Decimal | None = None
 
     @property
     def risk_per_lot(self) -> Decimal:
+        if self.sizing_risk_per_lot is not None:
+            return self.sizing_risk_per_lot
         return self.max_loss_per_lot + self.costs_per_lot
 
     def describe_legs(self) -> str:
         return ", ".join(
             f"{side.value} {a.contract.tradingsymbol}@{price} (d={float(a.delta):+.2f})"
             for (a, side), price in zip(self.legs, self.prices, strict=True)
+        )
+
+    def to_risk_candidate(self, lots: int) -> StrategyCandidate:
+        """Candidate for the RiskEngine budget check.
+
+        Leg-in positions are stop-managed: the per-trade budget is checked against the
+        stop-loss risk; the full premium is still bounded by the margin/capital checks.
+        """
+        candidate = self.to_candidate(lots)
+        if self.sizing_risk_per_lot is None:
+            return candidate
+        return replace(
+            candidate,
+            max_loss=self.sizing_risk_per_lot * lots - self.costs_per_lot * lots
+            if self.sizing_risk_per_lot > self.costs_per_lot
+            else self.sizing_risk_per_lot * lots,
         )
 
     def to_candidate(self, lots: int) -> StrategyCandidate:
@@ -190,11 +199,18 @@ class StrategyConfig:
     # Fair credit/width ~ probability the short finishes ITM; for the 0.20-0.30 / 0.05-0.15
     # delta bands that is ~0.15-0.25, so 0.20 would reject the requirement's own bands.
     min_credit_to_width: float = 0.15  # credit verticals
-    min_condor_credit_to_width: float = 0.12  # iron condor (credit vs the wider wing)
-    min_ib_credit_to_width: float = 0.35  # iron butterfly
-    min_long_ib_rr: float = 0.5  # long iron butterfly max profit / debit
     delta_tolerance: float = 0.05  # widen bands once if no listed strike fits
-    ib_risk_fraction: Decimal = Decimal("0.5")  # IB sized smaller (concentrated gamma)
+    # Leg-in lock (tested variant "lock t40 s20"): premium stop, hedge trigger, target.
+    leg_in_stop: float = 0.20
+    leg_in_hedge_trigger: float = 0.40
+    leg_in_target_width: float = 0.80
+    leg_in_max_delta: float = 0.60
+    leg_in_min_delta_small: float = 0.20  # below Rs 1L: cheaper OTM strikes fit the budget
+    leg_in_min_delta: float = 0.30
+    # Evidence exists only at 1 lot: multi-lot sizing at Rs 5L-10L turned the same signals
+    # negative in the engine replay (deeper first-half drawdown, then risk throttling).
+    leg_in_max_lots: int = 1
+    capital_utilization: Decimal = Decimal("1.0")  # owner: up to 100% of capital deployed
     rate: float = 0.065
     charges: ChargeSchedule = field(default_factory=ChargeSchedule)
 
@@ -206,6 +222,7 @@ class MarketContext:
     far: OptionChainSnapshot | None
     oi: dict[int, int]  # instrument_token -> open interest
     now: datetime
+    equity: Decimal | None = None  # current verified equity (capital-dependent rules)
 
 
 # ------------------------------------------------------------- setup rules
@@ -236,72 +253,56 @@ def _volume(state: MarketState) -> Check:
     )
 
 
-def setup_bull_call(s: MarketState, now: datetime) -> list[Check]:
+def _leg_in_signal(s: MarketState, now: datetime, bullish: bool) -> list[Check]:
+    sid = LEG_IN_CALL if bullish else LEG_IN_PUT
     st = s.structure
-    breakout = st.bullish_bos or (
-        s.opening_range_high is not None
-        and s.close > s.opening_range_high
-        and s.prev_close <= s.opening_range_high
+    if bullish:
+        brk = st.bullish_bos or (
+            s.opening_range_high is not None and s.close > s.opening_range_high >= s.prev_close
+        )
+        return [
+            _window(sid, now),
+            _c(
+                "EMA9 > EMA21 > EMA50",
+                s.ema9 > s.ema21 > s.ema50,
+                f"{s.ema9:.1f}/{s.ema21:.1f}/{s.ema50:.1f}",
+            ),
+            _c(
+                "ADX >= 20 and rising",
+                s.adx >= 20 and s.adx_rising,
+                f"ADX {s.adx:.1f} prev {s.adx_prev:.1f}",
+            ),
+            _c("+DI > -DI", s.plus_di > s.minus_di, f"{s.plus_di:.1f}/{s.minus_di:.1f}"),
+            _c("RSI 55-75", 55 <= s.rsi <= 75, f"{s.rsi:.1f}"),
+            _c("breakout (BOS or opening range)", brk, ""),
+        ]
+    brk = st.bearish_bos or (
+        s.opening_range_low is not None and s.close < s.opening_range_low <= s.prev_close
     )
     return [
-        _window(BULL_CALL, now),
-        _c("HH-HL structure", st.hh_hl, f"highs {st.last_highs} lows {st.last_lows}"),
-        _c("close above prior swing high / resistance", breakout, "BOS or opening-range breakout"),
-        _c(
-            "EMA9 > EMA21 > EMA50",
-            s.ema9 > s.ema21 > s.ema50,
-            f"{s.ema9:.1f}/{s.ema21:.1f}/{s.ema50:.1f}",
-        ),
-        _vwap(s, above=True),
-        _c(
-            "ADX >= 20 and rising",
-            s.adx >= 20 and s.adx_rising,
-            f"ADX {s.adx:.1f} prev {s.adx_prev:.1f}",
-        ),
-        _c("+DI > -DI", s.plus_di > s.minus_di, f"{s.plus_di:.1f}/{s.minus_di:.1f}"),
-        _c("RSI > 55", s.rsi > 55, f"{s.rsi:.1f}"),
-        _c("MACD histogram > 0", s.macd_hist > 0, f"{s.macd_hist:.2f}"),
-        _volume(s),
-        _c(
-            "ATR supports expansion",
-            s.atr >= s.atr_median,
-            f"{s.atr:.1f} vs median {s.atr_median:.1f}",
-        ),
-    ]
-
-
-def setup_bear_put(s: MarketState, now: datetime) -> list[Check]:
-    st = s.structure
-    breakdown = st.bearish_bos or (
-        s.opening_range_low is not None
-        and s.close < s.opening_range_low
-        and s.prev_close >= s.opening_range_low
-    )
-    return [
-        _window(BEAR_PUT, now),
-        _c("LL-LH structure", st.ll_lh, f"highs {st.last_highs} lows {st.last_lows}"),
-        _c("close below prior swing low / support", breakdown, "BOS or opening-range breakdown"),
+        _window(sid, now),
         _c(
             "EMA9 < EMA21 < EMA50",
             s.ema9 < s.ema21 < s.ema50,
             f"{s.ema9:.1f}/{s.ema21:.1f}/{s.ema50:.1f}",
         ),
-        _vwap(s, above=False),
         _c(
             "ADX >= 20 and rising",
             s.adx >= 20 and s.adx_rising,
             f"ADX {s.adx:.1f} prev {s.adx_prev:.1f}",
         ),
         _c("-DI > +DI", s.minus_di > s.plus_di, f"{s.minus_di:.1f}/{s.plus_di:.1f}"),
-        _c("RSI < 45", s.rsi < 45, f"{s.rsi:.1f}"),
-        _c("MACD histogram < 0", s.macd_hist < 0, f"{s.macd_hist:.2f}"),
-        _volume(s),
-        _c(
-            "ATR supports expansion",
-            s.atr >= s.atr_median,
-            f"{s.atr:.1f} vs median {s.atr_median:.1f}",
-        ),
+        _c("RSI 25-45", 25 <= s.rsi <= 45, f"{s.rsi:.1f}"),
+        _c("breakdown (BOS or opening range)", brk, ""),
     ]
+
+
+def setup_leg_in_call(s: MarketState, now: datetime) -> list[Check]:
+    return _leg_in_signal(s, now, bullish=True)
+
+
+def setup_leg_in_put(s: MarketState, now: datetime) -> list[Check]:
+    return _leg_in_signal(s, now, bullish=False)
 
 
 def _support(s: MarketState) -> float | None:
@@ -357,131 +358,6 @@ def setup_bear_call(s: MarketState, now: datetime) -> list[Check]:
         _c("MACD bearish", s.macd_hist < 0, f"{s.macd_hist:.2f}"),
         _c("no bullish BOS", not s.structure.bullish_bos, ""),
     ]
-
-
-def _iv_vs_rv(s: MarketState, short_vol: bool) -> Check:
-    if s.atm_iv_near is None or s.rv_annual is None:
-        return _c("IV vs realised vol", False, "IV or realised volatility unavailable")
-    ok = s.atm_iv_near > s.rv_annual if short_vol else s.atm_iv_near < s.rv_annual * 1.5
-    return _c("IV vs realised vol", ok, f"IV {s.atm_iv_near:.3f} vs RV {s.rv_annual:.3f}")
-
-
-def setup_iron_condor(s: MarketState, now: datetime) -> list[Check]:
-    flat = abs(s.ema9 - s.ema21) < 0.15 * s.atr or s.ema_crossings >= 2
-    return [
-        _window(IRON_CONDOR, now),
-        _c("ADX < 20", s.adx < 20, f"{s.adx:.1f}"),
-        _c(
-            "EMA9/21 flat or crossing",
-            flat,
-            f"gap {abs(s.ema9 - s.ema21):.1f}, crosses {s.ema_crossings}",
-        ),
-        _c(
-            "price oscillates around VWAP",
-            s.vwap_available and s.vwap_crossings >= 2,
-            f"crossings {s.vwap_crossings}" if s.vwap_available else "VWAP unavailable",
-        ),
-        _c(
-            "Bollinger bands narrowing",
-            s.bandwidth < s.bandwidth_mean,
-            f"{s.bandwidth:.5f} vs mean {s.bandwidth_mean:.5f}",
-        ),
-        _c("RSI 40-60", 40 <= s.rsi <= 60, f"{s.rsi:.1f}"),
-        _c("ATR contracting", s.atr < s.atr_median, f"{s.atr:.1f} vs {s.atr_median:.1f}"),
-        _iv_vs_rv(s, short_vol=True),
-        _c(
-            ">= 2 tests of each range boundary",
-            s.range_high_tests >= 2 and s.range_low_tests >= 2,
-            f"high {s.range_high_tests}, low {s.range_low_tests}",
-        ),
-        _c("no developing trend structure", not (s.structure.hh_hl or s.structure.ll_lh), ""),
-    ]
-
-
-def setup_iron_butterfly(s: MarketState, now: datetime) -> list[Check]:
-    dist = s.vwap_distance_atr
-    return [
-        _window(IRON_BUTTERFLY, now),
-        _c("ADX < 18", s.adx < 18, f"{s.adx:.1f}"),
-        _c("RSI 45-55", 45 <= s.rsi <= 55, f"{s.rsi:.1f}"),
-        _c(
-            "price near VWAP",
-            dist is not None and dist <= 0.3,
-            f"{dist:.2f} ATR" if dist is not None else "VWAP unavailable",
-        ),
-        _c("repeated mean reversion", s.vwap_crossings >= 3, f"VWAP crossings {s.vwap_crossings}"),
-        _c("Bollinger compressed", s.bandwidth_rank <= 30, f"rank {s.bandwidth_rank:.0f}"),
-        _c("ATR declining", s.atr < s.atr_prev, f"{s.atr:.1f} vs {s.atr_prev:.1f}"),
-        _iv_vs_rv(s, short_vol=True),
-        _c("no HH-HL / LL-LH trend", not (s.structure.hh_hl or s.structure.ll_lh), ""),
-    ]
-
-
-def setup_calendar(s: MarketState, now: datetime) -> list[Check]:
-    ok_term = (
-        s.atm_iv_near is not None
-        and s.atm_iv_far is not None
-        and s.atm_iv_near >= s.atm_iv_far * 1.05
-    )
-    low_rv = s.rv_short is not None and s.rv_annual is not None and s.rv_short <= s.rv_annual
-    return [
-        _window(CALENDAR, now),
-        _c("expected consolidation (ADX < 20)", s.adx < 20, f"{s.adx:.1f}"),
-        _c("low near-term realised vol", low_rv, f"RV short {s.rv_short} vs RV {s.rv_annual}"),
-        _c("front IV >= 1.05 x back IV", ok_term, f"near {s.atm_iv_near} far {s.atm_iv_far}"),
-    ]
-
-
-def setup_long_iron_butterfly(s: MarketState, now: datetime) -> list[Check]:
-    breakout = (
-        s.opening_range_high is not None
-        and s.opening_range_low is not None
-        and (s.close > s.opening_range_high or s.close < s.opening_range_low)
-    )
-    return [
-        _window(LONG_IRON_BUTTERFLY, now),
-        _c(
-            "recent Bollinger squeeze",
-            s.bandwidth_min_recent_rank <= 20,
-            f"min recent rank {s.bandwidth_min_recent_rank:.0f}",
-        ),
-        _c(
-            "bandwidth now expanding",
-            s.bandwidth > s.bandwidth_prev * 1.05,
-            f"{s.bandwidth:.5f} vs {s.bandwidth_prev:.5f}",
-        ),
-        _c("ATR expansion", s.atr > s.atr_prev, f"{s.atr:.1f} vs {s.atr_prev:.1f}"),
-        _c(
-            "ADX turning up from low",
-            s.adx_rising and s.adx_min_recent < 20,
-            f"ADX {s.adx:.1f}, recent min {s.adx_min_recent:.1f}",
-        ),
-        _volume(s),
-        _c("opening range broken", breakout, f"OR {s.opening_range_low}-{s.opening_range_high}"),
-        _iv_vs_rv(s, short_vol=False),
-    ]
-
-
-SETUPS: dict[str, Callable[[MarketState, datetime], list[Check]]] = {
-    BULL_CALL: setup_bull_call,
-    BEAR_PUT: setup_bear_put,
-    BULL_PUT: setup_bull_put,
-    BEAR_CALL: setup_bear_call,
-    IRON_CONDOR: setup_iron_condor,
-    IRON_BUTTERFLY: setup_iron_butterfly,
-    CALENDAR: setup_calendar,
-    LONG_IRON_BUTTERFLY: setup_long_iron_butterfly,
-}
-REGIME_FOR = {
-    BULL_CALL: Regime.BULL_TREND,
-    BULL_PUT: Regime.BULL_TREND,
-    BEAR_PUT: Regime.BEAR_TREND,
-    BEAR_CALL: Regime.BEAR_TREND,
-    IRON_CONDOR: Regime.RANGE,
-    IRON_BUTTERFLY: Regime.RANGE,
-    CALENDAR: Regime.RANGE,
-    LONG_IRON_BUTTERFLY: Regime.VOLATILITY_EXPANSION,
-}
 
 
 # ----------------------------------------------------------- strike engine
@@ -656,7 +532,7 @@ def _price_structure(
     if direction in {"neutral"} and gamma < 0:
         g = _clamp(g - min(30.0, abs(gamma) * state.spot * 50))
     ratio = (state.atm_iv_near / state.rv_annual) if state.atm_iv_near and state.rv_annual else None
-    short_vol = strategy_id in {BULL_PUT, BEAR_CALL, IRON_CONDOR, IRON_BUTTERFLY, CALENDAR}
+    short_vol = strategy_id in {BULL_PUT, BEAR_CALL}
     if ratio is None:
         v = 50.0
     else:
@@ -766,104 +642,6 @@ def _best(builds: list[_Build]) -> tuple[Proposal | None, str, int]:
 
 
 # ------------------------------------------------------ structure builders
-def build_bull_call(
-    ctx: MarketContext, cfg: StrategyConfig, budget: Decimal, *, relax: bool = False
-):
-    calls = _by_right(ctx.near, Right.CE)
-    longs = _in_band(calls, 0.55, 0.65, cfg.delta_tolerance)
-    shorts = _in_band(calls, 0.25, 0.35, cfg.delta_tolerance)
-    if relax:  # narrower spread: short call anywhere between the long leg and the band
-        shorts = _delta_range(calls, 0.25 - cfg.delta_tolerance, 0.55)
-    s = ctx.state
-    resistances = [
-        x for x in (s.prev_day_high, s.prev_week_high, _resistance(s)) if x and x > s.spot
-    ]
-    plan = ExitPlan(
-        0.5,
-        "max_profit",
-        0.5,
-        None,
-        invalidate_below=_support(s),
-        invalidate_above=None,
-        alignment="bullish",
-    )
-
-    def rule_for(short_strike: float):
-        def rule(max_loss, max_profit, debit):
-            if max_profit is None or max_profit / max_loss < Decimal(str(cfg.min_debit_rr)):
-                return f"reward/risk below {cfg.min_debit_rr}"
-            blocking = [
-                r for r in resistances if s.spot < r < s.spot + 0.5 * (short_strike - s.spot)
-            ]
-            if blocking:
-                return f"major resistance {min(blocking):.0f} inside expected reward distance"
-            return ""
-
-        return rule
-
-    builds = [
-        _price_structure(
-            BULL_CALL,
-            [(lo, Side.BUY), (sh, Side.SELL)],
-            ctx,
-            cfg,
-            risk_budget=budget,
-            exit_plan=plan,
-            rationale="Bullish HH-HL breakout; defined-risk call debit vertical",
-            reject_rule=rule_for(float(sh.contract.strike)),
-        )
-        for lo, sh in product(longs, shorts)
-        if sh.contract.strike > lo.contract.strike
-    ]
-    return _best(builds)
-
-
-def build_bear_put(
-    ctx: MarketContext, cfg: StrategyConfig, budget: Decimal, *, relax: bool = False
-):
-    puts = _by_right(ctx.near, Right.PE)
-    longs = _in_band(puts, 0.55, 0.65, cfg.delta_tolerance)
-    shorts = _in_band(puts, 0.25, 0.35, cfg.delta_tolerance)
-    if relax:
-        shorts = _delta_range(puts, 0.25 - cfg.delta_tolerance, 0.55)
-    s = ctx.state
-    supports = [x for x in (s.prev_day_low, s.prev_week_low, _support(s)) if x and x < s.spot]
-    plan = ExitPlan(
-        0.5,
-        "max_profit",
-        0.5,
-        None,
-        invalidate_below=None,
-        invalidate_above=_resistance(s),
-        alignment="bearish",
-    )
-
-    def rule_for(short_strike: float):
-        def rule(max_loss, max_profit, debit):
-            if max_profit is None or max_profit / max_loss < Decimal(str(cfg.min_debit_rr)):
-                return f"reward/risk below {cfg.min_debit_rr}"
-            blocking = [x for x in supports if s.spot - 0.5 * (s.spot - short_strike) < x < s.spot]
-            if blocking:
-                return f"major support {max(blocking):.0f} inside expected reward distance"
-            return ""
-
-        return rule
-
-    builds = [
-        _price_structure(
-            BEAR_PUT,
-            [(lo, Side.BUY), (sh, Side.SELL)],
-            ctx,
-            cfg,
-            risk_budget=budget,
-            exit_plan=plan,
-            rationale="Bearish LL-LH breakdown; defined-risk put debit vertical",
-            reject_rule=rule_for(float(sh.contract.strike)),
-        )
-        for lo, sh in product(longs, shorts)
-        if sh.contract.strike < lo.contract.strike
-    ]
-    return _best(builds)
 
 
 def _credit_rule(cfg: StrategyConfig, width: Decimal, lot: int, min_ratio: float):
@@ -962,229 +740,149 @@ def build_bear_call(
     return _best(builds)
 
 
-def build_iron_condor(
-    ctx: MarketContext, cfg: StrategyConfig, budget: Decimal, *, relax: bool = False
-):
-    s = ctx.state
-    em = s.expected_move()
-    if em is None:
-        return None, "expected move unavailable (no ATM IV)", 0
-    puts, calls = _by_right(ctx.near, Right.PE), _by_right(ctx.near, Right.CE)
-    # Requirement order: short strikes outside the projected range first, then delta band.
-    put_floor = min(s.range_low, s.spot - em)
-    call_floor = max(s.range_high, s.spot + em)
-    sp = _in_band(
-        [a for a in puts if float(a.contract.strike) < put_floor], 0.15, 0.20, cfg.delta_tolerance
-    )
-    sc = _in_band(
-        [a for a in calls if float(a.contract.strike) > call_floor], 0.15, 0.20, cfg.delta_tolerance
-    )
-    lp = _in_band(puts, 0.05, 0.10, cfg.delta_tolerance)
-    lc = _in_band(calls, 0.05, 0.10, cfg.delta_tolerance)
-    if relax:
-        lp = _delta_range(puts, 0.02, 0.20)
-        lc = _delta_range(calls, 0.02, 0.20)
-    if not sp or not sc:
-        return None, f"no short strikes outside range and expected move (+/-{em:.0f})", 0
-    plan = ExitPlan(
-        0.5, "max_profit", 1.0, 0.35, None, None, range_low=s.range_low, range_high=s.range_high
-    )
-    builds = []
-    for spt, lpt, sct, lct in product(sp, lp, sc, lc):
-        if not (
-            lpt.contract.strike < spt.contract.strike and lct.contract.strike > sct.contract.strike
-        ):
+def build_leg_in(
+    ctx: MarketContext, cfg: StrategyConfig, budget: Decimal, *, bullish: bool
+) -> tuple[Proposal | None, str, int]:
+    """Leg 1 of the lock plan: buy one option, highest |delta| whose stop risk fits.
+
+    Sizing risk = ask x lot x stop + round-trip charges. The whole premium must also fit
+    the deployable capital (equity x capital_utilization).
+    """
+    sid = LEG_IN_CALL if bullish else LEG_IN_PUT
+    right = Right.CE if bullish else Right.PE
+    equity = ctx.equity or Decimal("0")
+    floor = cfg.leg_in_min_delta_small if equity < Decimal("100000") else cfg.leg_in_min_delta
+    deployable = equity * cfg.capital_utilization if equity else None
+    options = [
+        a for a in _by_right(ctx.near, right) if floor <= _abs_delta(a) <= cfg.leg_in_max_delta
+    ]
+    if not options:
+        return None, f"no {right.value} strike with |delta| {floor:.2f}-{cfg.leg_in_max_delta}", 0
+    rejected: dict[str, int] = {}
+    fits: list[tuple[OptionAnalytics, Decimal, Decimal]] = []
+    for a in options:
+        ok, _, why = _leg_liquidity(a, Side.BUY, cfg)
+        if not ok:
+            rejected[why.split(" ")[-1] if "depth" in why else "spread"] = (
+                rejected.get("liquidity", 0) + 1
+            )
             continue
-        width = max(
-            spt.contract.strike - lpt.contract.strike, lct.contract.strike - sct.contract.strike
+        lot = a.contract.lot_size
+        premium = a.quote.ask * lot
+        costs = round_trip_estimate([("BUY", a.quote.ask, lot)], cfg.charges)
+        risk = premium * Decimal(str(cfg.leg_in_stop)) + costs
+        if risk > budget:
+            rejected["budget"] = rejected.get("budget", 0) + 1
+            continue
+        if deployable is not None and premium > deployable:
+            rejected["capital"] = rejected.get("capital", 0) + 1
+            continue
+        fits.append((a, risk, costs))
+    if not fits:
+        cheapest = min(options, key=lambda a: a.quote.ask)
+        need = cheapest.quote.ask * cheapest.contract.lot_size * Decimal(str(cfg.leg_in_stop))
+        return (
+            None,
+            (
+                f"no strike fits budget Rs{budget:,.0f} (cheapest stop risk "
+                f"Rs{need:,.0f}; {rejected})"
+            ),
+            len(options),
         )
-        builds.append(
-            _price_structure(
-                IRON_CONDOR,
-                [(lpt, Side.BUY), (lct, Side.BUY), (spt, Side.SELL), (sct, Side.SELL)],
-                ctx,
-                cfg,
-                risk_budget=budget,
-                exit_plan=plan,
-                rationale=(
-                    f"Confirmed range {s.range_low:.0f}-{s.range_high:.0f}; "
-                    f"shorts beyond EM {em:.0f}"
-                ),
-                reject_rule=_credit_rule(
-                    cfg, width, spt.contract.lot_size, cfg.min_condor_credit_to_width
-                ),
-            )
-        )
-    return _best(builds)
+    a, risk, costs = max(fits, key=lambda item: _abs_delta(item[0]))
+    lot = a.contract.lot_size
+    price = a.quote.ask
+    k = a.contract.strike
+    state = ctx.state
+    max_profit = None if bullish else (k - price) * lot
+    years = years_between(ctx.now, expiry_close(a.contract.expiry))
+    sign = 1 if bullish else -1
 
+    def terminal(spot: float) -> float:
+        intrinsic = max(sign * (spot - float(k)), 0.0)
+        return (intrinsic - float(price)) * lot
 
-def build_iron_butterfly(ctx: MarketContext, cfg: StrategyConfig, budget: Decimal):
-    s = ctx.state
-    puts, calls = _by_right(ctx.near, Right.PE), _by_right(ctx.near, Right.CE)
-    if not puts or not calls:
-        return None, "chain incomplete", 0
-    strikes = sorted({a.contract.strike for a in calls} & {a.contract.strike for a in puts})
-    if not strikes:
-        return None, "no paired ATM strike", 0
-    atm = min(strikes, key=lambda k: abs(float(k) - s.spot))
-    sc = next(a for a in calls if a.contract.strike == atm)
-    spt = next(a for a in puts if a.contract.strike == atm)
-    plan = ExitPlan(
-        0.4, "max_profit", 1.0, None, None, None, range_low=s.range_low, range_high=s.range_high
+    prob = expiry_probability(
+        terminal, spot=state.spot, iv=float(a.implied_volatility), years=years, costs=float(costs)
     )
-    builds = []
-    for lct in (a for a in calls if a.contract.strike > atm):
-        for lpt in (a for a in puts if a.contract.strike < atm):
-            if lct.contract.strike - atm != atm - lpt.contract.strike:
-                continue  # symmetric wings
-            width = lct.contract.strike - atm
-            builds.append(
-                _price_structure(
-                    IRON_BUTTERFLY,
-                    [(lpt, Side.BUY), (lct, Side.BUY), (spt, Side.SELL), (sc, Side.SELL)],
-                    ctx,
-                    cfg,
-                    risk_budget=budget * cfg.ib_risk_fraction,
-                    exit_plan=plan,
-                    rationale=f"Tight range pinned near {atm}; ATM iron butterfly",
-                    reject_rule=_credit_rule(
-                        cfg, width, sc.contract.lot_size, cfg.min_ib_credit_to_width
-                    ),
-                )
-            )
-    return _best(builds)
-
-
-def build_calendar(ctx: MarketContext, cfg: StrategyConfig, budget: Decimal):
-    if ctx.far is None:
-        return None, "no back-month expiry available", 0
-    s = ctx.state
-    right = Right.CE if s.bias != "bearish" else Right.PE
-    near = _by_right(ctx.near, right)
-    far = {a.contract.strike: a for a in _by_right(ctx.far, right)}
-    if not near:
-        return None, "near chain incomplete", 0
-    em = s.expected_move() or s.atr * 4
+    _, liquidity, _ = _leg_liquidity(a, Side.BUY, cfg)
     plan = ExitPlan(
-        0.15, "debit", 0.30, None, invalidate_below=s.spot - em, invalidate_above=s.spot + em
+        profit_target_pct=cfg.leg_in_target_width,
+        profit_basis="lock_width",
+        stop_loss_pct=cfg.leg_in_stop,
+        short_delta_limit=None,
+        invalidate_below=None,
+        invalidate_above=None,
+        kind="leg_in",
+        hedge_trigger=cfg.leg_in_hedge_trigger,
+        lock_target_width=cfg.leg_in_target_width,
+        alignment="bullish" if bullish else "bearish",
     )
-    builds = []
-    shorts = _in_band(near, 0.40, 0.55, cfg.delta_tolerance)
-    for short in shorts:
-        # Calendar: same strike. Diagonal (mild bias): long further-dated leg one step ITM.
-        long_strikes = [short.contract.strike]
-        if s.bias in {"bullish", "bearish"}:
-            step = sorted(far)
-            idx = step.index(short.contract.strike) if short.contract.strike in far else -1
-            if idx > 0 and right is Right.CE:
-                long_strikes.append(step[idx - 1])
-            if 0 <= idx < len(step) - 1 and right is Right.PE:
-                long_strikes.append(step[idx + 1])
-        for k in long_strikes:
-            longleg = far.get(k)
-            if longleg is None:
-                continue
-            # Geometry that bounds loss by the debit: long strike at-or-better than short.
-            if (right is Right.CE and k > short.contract.strike) or (
-                right is Right.PE and k < short.contract.strike
-            ):
-                continue
-
-            def rule(max_loss, max_profit, debit, _cost=None):
-                if max_profit is None or max_profit <= 0:
-                    return "no positive modelled payoff by session end"
-                return ""
-
-            builds.append(
-                _price_structure(
-                    CALENDAR,
-                    [(longleg, Side.BUY), (short, Side.SELL)],
-                    ctx,
-                    cfg,
-                    risk_budget=budget,
-                    exit_plan=plan,
-                    multi_expiry=True,
-                    rationale=(
-                        "Front IV rich vs back month; "
-                        + ("calendar" if k == short.contract.strike else "diagonal")
-                    ),
-                    reject_rule=rule,
-                )
-            )
-    return _best(builds)
+    proposal = Proposal(
+        strategy_id=sid,
+        regime=Regime.BULL_TREND if bullish else Regime.BEAR_TREND,
+        legs=((a, Side.BUY),),
+        prices=(price,),
+        lot_size=lot,
+        net_debit_per_lot=price * lot,
+        max_loss_per_lot=price * lot,
+        max_profit_per_lot=max_profit,
+        costs_per_lot=costs,
+        breakevens=(k + price if bullish else k - price,),
+        pop=prob.pop,
+        expected_value_per_lot=prob.expected_value,
+        stress_worst_per_lot=-float(price * lot),
+        score=liquidity,  # informational only; leg-in is not score-gated
+        components={"L": liquidity},
+        exit_plan=plan,
+        rationale=(
+            f"Trend {'breakout' if bullish else 'breakdown'}: buy "
+            f"{a.contract.tradingsymbol} (delta {float(a.delta):+.2f}); lock with a "
+            f"short strike at +{cfg.leg_in_hedge_trigger:.0%}"
+        ),
+        data_timestamp=a.quote.timestamp,
+        sizing_risk_per_lot=risk,
+    )
+    return proposal, "", sum(rejected.values())
 
 
-def build_long_iron_butterfly(ctx: MarketContext, cfg: StrategyConfig, budget: Decimal):
-    s = ctx.state
-    puts, calls = _by_right(ctx.near, Right.PE), _by_right(ctx.near, Right.CE)
-    strikes = sorted({a.contract.strike for a in calls} & {a.contract.strike for a in puts})
-    if not strikes:
-        return None, "no paired ATM strike", 0
-    atm = min(strikes, key=lambda k: abs(float(k) - s.spot))
-    lc = next(a for a in calls if a.contract.strike == atm)
-    lp = next(a for a in puts if a.contract.strike == atm)
-    em = s.expected_move()
-    plan = ExitPlan(0.4, "debit", 0.35, None, None, None, time_stop_bars=6)
-    builds = []
-    for sct in (a for a in calls if a.contract.strike > atm):
-        for spt in (a for a in puts if a.contract.strike < atm):
-            if sct.contract.strike - atm != atm - spt.contract.strike:
-                continue
-
-            def rule(max_loss, max_profit, debit, _w=sct.contract.strike - atm):
-                if debit <= 0:
-                    return "long iron butterfly must be a debit"
-                if max_profit is None or max_profit / max_loss < Decimal(str(cfg.min_long_ib_rr)):
-                    return f"max profit/debit below {cfg.min_long_ib_rr}"
-                per_unit = debit / lc.contract.lot_size
-                if em is not None and Decimal(str(em)) < per_unit:
-                    return f"expected move {em:.0f} < breakeven distance {per_unit:.0f}"
-                return ""
-
-            builds.append(
-                _price_structure(
-                    LONG_IRON_BUTTERFLY,
-                    [(lc, Side.BUY), (lp, Side.BUY), (sct, Side.SELL), (spt, Side.SELL)],
-                    ctx,
-                    cfg,
-                    risk_budget=budget,
-                    exit_plan=plan,
-                    rationale="Compression breakout; defined-debit long iron butterfly",
-                    reject_rule=rule,
-                )
-            )
-    return _best(builds)
+def build_leg_in_call(ctx: MarketContext, cfg: StrategyConfig, budget: Decimal):
+    return build_leg_in(ctx, cfg, budget, bullish=True)
 
 
+def build_leg_in_put(ctx: MarketContext, cfg: StrategyConfig, budget: Decimal):
+    return build_leg_in(ctx, cfg, budget, bullish=False)
+
+
+SETUPS: dict[str, Callable[[MarketState, datetime], list[Check]]] = {
+    LEG_IN_CALL: setup_leg_in_call,
+    LEG_IN_PUT: setup_leg_in_put,
+    BULL_PUT: setup_bull_put,
+    BEAR_CALL: setup_bear_call,
+}
+REGIME_FOR = {
+    LEG_IN_CALL: Regime.BULL_TREND,
+    LEG_IN_PUT: Regime.BEAR_TREND,
+    BULL_PUT: Regime.BULL_TREND,
+    BEAR_CALL: Regime.BEAR_TREND,
+}
 BUILDERS = {
-    BULL_CALL: build_bull_call,
-    BEAR_PUT: build_bear_put,
+    LEG_IN_CALL: build_leg_in_call,
+    LEG_IN_PUT: build_leg_in_put,
     BULL_PUT: build_bull_put,
     BEAR_CALL: build_bear_call,
-    IRON_CONDOR: build_iron_condor,
-    IRON_BUTTERFLY: build_iron_butterfly,
-    CALENDAR: build_calendar,
-    LONG_IRON_BUTTERFLY: build_long_iron_butterfly,
 }
 
 
-CAPITAL_FIT = frozenset({BULL_CALL, BEAR_PUT, BULL_PUT, BEAR_CALL, IRON_CONDOR})
+CAPITAL_FIT = frozenset({BULL_PUT, BEAR_CALL})
 
 
 def regime_check(strategy_id: str, state: MarketState) -> Check:
-    """The classified regime must support the family's thesis (spec 5.1 / 8.1).
-
-    Uncertain regimes block everything except the defined-debit long-volatility
-    structure, which the requirement allows when direction is unconfirmed.
-    """
+    """The classified regime must support the family's thesis (spec 5.1 / 8.1)."""
     regime, bias = state.regime, state.bias
     direction = DIRECTION[strategy_id]
     if regime is Regime.UNKNOWN:
         ok = False
-    elif direction == "volatility":
-        ok = regime not in {Regime.BULL_TREND, Regime.BEAR_TREND}
-    elif direction == "neutral":
-        ok = regime in {Regime.RANGE, Regime.VOLATILITY_COMPRESSION}
     elif direction == "bullish":
         ok = (
             regime is Regime.BULL_TREND
@@ -1214,6 +912,16 @@ def evaluate_all(
             results.append(Evaluation(sid, priority, (), None, "disabled by configuration"))
             continue
         checks = (regime_check(sid, ctx.state), *SETUPS[sid](ctx.state, ctx.now))
+        if sid in MIN_EQUITY:
+            need = MIN_EQUITY[sid]
+            checks = (
+                _c(
+                    f"capital >= Rs{need:,.0f}",
+                    ctx.equity is not None and ctx.equity >= need,
+                    "below this, backtests showed charges outweigh the edge",
+                ),
+                *checks,
+            )
         if not all(c.passed for c in checks):
             results.append(Evaluation(sid, priority, checks, None, ""))
             continue
@@ -1232,21 +940,18 @@ def evaluate_all(
                     why = f"{why}; capital-fit pass: {fit_why}"
         except Exception as exc:  # a builder defect must not crash the cycle
             proposal, why, rejected = None, f"builder error: {type(exc).__name__}: {exc}", 0
-        if proposal is not None and proposal.score < cfg.min_score:
+        if proposal is not None and sid not in LEG_IN and proposal.score < cfg.min_score:
             why, proposal = f"best score {proposal.score:.1f} < minimum {cfg.min_score}", None
         results.append(Evaluation(sid, priority, checks, proposal, why, rejected))
     return results
 
 
 __all__ = [
-    "BULL_CALL",
-    "BEAR_PUT",
+    "LEG_IN_CALL",
+    "LEG_IN_PUT",
+    "LEG_IN",
     "BULL_PUT",
     "BEAR_CALL",
-    "IRON_CONDOR",
-    "IRON_BUTTERFLY",
-    "CALENDAR",
-    "LONG_IRON_BUTTERFLY",
     "PRIORITY",
     "DIRECTION",
     "Check",

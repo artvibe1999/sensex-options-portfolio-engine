@@ -6,13 +6,12 @@ from decimal import Decimal
 from types import SimpleNamespace
 
 import pytest
-from engine_fakes import NOW, SPOT, FakeKite, bullish_state, make_state
+from engine_fakes import NOW, SPOT, FakeKite
 
 from sensex_engine import reconciliation
 from sensex_engine import strategies as S
 from sensex_engine.book import BookLeg, BookPosition, EngineBook
 from sensex_engine.capital_policy import risk_policy
-from sensex_engine.domain import Regime
 from sensex_engine.engine import Engine, EngineConfig, Notifier
 from sensex_engine.kite import KiteReadOnlyAdapter
 from sensex_engine.kite_execution import KiteOrderExecutionAdapter
@@ -97,38 +96,6 @@ def test_emergency_pauses_engine_even_when_broker_close_raises():
     update, replies = _update("/emergency")
     asyncio.run(dispatch_command(update, None, operations=ops, store=Store()))
     assert engine.user_paused and ops.paused and ops.mode.mode.value == "paper"
-
-
-@pytest.mark.parametrize(
-    "regime,bias,sid,ok",
-    [
-        (Regime.TRANSITION, "neutral", S.BULL_CALL, False),
-        (Regime.UNKNOWN, "neutral", S.LONG_IRON_BUTTERFLY, False),
-        (Regime.TRANSITION, "neutral", S.LONG_IRON_BUTTERFLY, True),
-        (Regime.BULL_TREND, "bullish", S.IRON_CONDOR, False),
-        (Regime.RANGE, "neutral", S.IRON_CONDOR, True),
-        (Regime.RANGE, "neutral", S.BULL_PUT, True),
-        (Regime.RANGE, "neutral", S.BULL_CALL, False),
-        (Regime.VOLATILITY_EXPANSION, "bearish", S.BEAR_PUT, True),
-        (Regime.VOLATILITY_EXPANSION, "bearish", S.BULL_CALL, False),
-    ],
-)
-def test_live_regime_gates_every_family(regime, bias, sid, ok):
-    assert S.regime_check(sid, make_state(regime=regime, bias=bias)).passed is ok
-
-
-def test_bull_call_blocked_when_classifier_says_transition():
-    from engine_fakes import FAR, NEAR, chain
-
-    ctx = S.MarketContext(
-        state=bullish_state(regime=Regime.TRANSITION),
-        near=chain(NEAR),
-        far=chain(FAR),
-        oi={},
-        now=NOW,
-    )
-    first = S.evaluate_all(ctx, risk_budget=Decimal("9000"))[0]
-    assert not first.eligible and first.checks[0].name == "regime supports thesis"
 
 
 def test_managed_scope_still_sees_engine_orphan_fills():
@@ -216,7 +183,7 @@ def _engine(tmp_path, fk):
         feed=feed,
         book=EngineBook(tmp_path / "e.db"),
         notifier=Notifier(alerts.append),
-        config=EngineConfig(enabled_strategies=frozenset({S.BULL_CALL})),
+        config=EngineConfig(enabled_strategies=frozenset({S.LEG_IN_CALL})),
         clock=lambda: fk.now,
     )
     return engine, alerts
@@ -249,29 +216,6 @@ def test_missing_quote_defers_daily_stop_instead_of_liquidating(tmp_path):
     assert "deferred" in engine.last_error
 
 
-def test_incomplete_live_entry_pauses_and_forces_paper(tmp_path, monkeypatch):
-    fk = FakeKite(funds=500000)
-    engine, alerts = _engine(tmp_path, fk)
-    ops = _ops(engine)
-    ops.mode.mode = ops.mode.mode.__class__("live")
-    ops.paused = False
-    engine.operations = ops
-
-    class Bridge:
-        def open(self, *a, **k):
-            raise RuntimeError("Live entry incomplete: residual=((1, -20),)")
-
-    engine.live = Bridge()
-    from engine_fakes import FAR, NEAR, chain
-
-    ctx = S.MarketContext(state=bullish_state(), near=chain(NEAR), far=chain(FAR), oi={}, now=NOW)
-    proposal, _, _ = S.build_bull_call(ctx, S.StrategyConfig(), Decimal("9000"))
-    policy = risk_policy(equity=Decimal("500000"), peak_equity=Decimal("500000"))
-    engine._open(proposal, 1, Decimal("5000"), "live", policy, bullish_state(), NOW)
-    assert engine.user_paused and ops.paused and ops.mode.mode.value == "paper"
-    assert not engine.book.open_positions() and "PAUSED" in alerts[-1]
-
-
 def test_operator_close_refuses_stale_snapshot(tmp_path):
     fk = FakeKite()
     engine, _ = _engine(tmp_path, fk)
@@ -285,11 +229,23 @@ def test_operator_close_refuses_stale_snapshot(tmp_path):
     assert SPOT > 0
 
 
-@pytest.mark.parametrize("text,expected", [
-    ("200000", "200000"), ("2,00,000", "200000"), ("Rs 50000", "50000"), ("50k", "50000"),
-    ("2.5L", "250000"), ("2.5 lakh", "250000"), ("1cr", "10000000"), ("₹75000", "75000"),
-    ("abc", None), ("-5", None), ("0", None), ("1e400", None),
-])
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("200000", "200000"),
+        ("2,00,000", "200000"),
+        ("Rs 50000", "50000"),
+        ("50k", "50000"),
+        ("2.5L", "250000"),
+        ("2.5 lakh", "250000"),
+        ("1cr", "10000000"),
+        ("₹75000", "75000"),
+        ("abc", None),
+        ("-5", None),
+        ("0", None),
+        ("1e400", None),
+    ],
+)
 def test_parse_amount(text, expected):
     from sensex_engine.telegram_control import parse_amount
 
@@ -304,8 +260,13 @@ def test_setcapital_resets_paper_equity_and_policy(tmp_path):
     engine.book.set_state("paper_base_capital", "50000")
     engine.book.start_day("paper", yesterday, Decimal("60000"))  # old peak
     engine.book.open_position(_position("old", yesterday.isoformat()))
-    engine.book.close_position("old", exit_prices={1: 0.0, 2: 70.0}, exit_costs=Decimal("10"),
-                               reason="x", closed_at=NOW - timedelta(days=1))
+    engine.book.close_position(
+        "old",
+        exit_prices={1: 0.0, 2: 70.0},
+        exit_costs=Decimal("10"),
+        reason="x",
+        closed_at=NOW - timedelta(days=1),
+    )
     realised = engine.book.realized_total("paper")
     ops = _ops(engine)
     reply = ops.handle("/setcapital 2.5L", user_id=1, chat_id=2)

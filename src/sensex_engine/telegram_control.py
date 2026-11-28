@@ -92,8 +92,8 @@ COMMAND_HELP: tuple[tuple[str, str, str], ...] = (
         "setcapital",
         "Set paper capital: /setcapital 200000",
         "Set current PAPER equity to any amount, e.g. /setcapital 200000, /setcapital 2.5L, "
-        "/setcapital 50k, /setcapital 1cr. Paper only (live capital always comes from Kite "
-        "funds). Not allowed while paper positions are open.",
+        "/setcapital 50k, /setcapital 1cr. Paper only; LIVE capital is always read from the "
+        "Zerodha account's available funds. Not allowed while paper positions are open.",
     ),
 )
 

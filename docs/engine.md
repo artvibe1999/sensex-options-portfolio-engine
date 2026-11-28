@@ -16,36 +16,54 @@ Every 30 s during 09:15–15:30 IST (weekdays). Holidays/closed sessions fail cl
 4. Manage open positions at executable marks: longs at bid, shorts at ask.
 5. On every newly completed 5-minute bar, evaluate all eight families, arbitrate, size and execute.
 
-## Strategies (`strategies.py`)
+## Strategies (`strategies.py`) - winners only (owner decision 2026-11-28)
 
-The families are listed in arbitration priority order. Each has explicit setup checks; `/strategies` shows every failed rule.
+The owner asked for only the strategies that showed after-charge profits in the archive replays. The catalogue is now:
 
-| # | Family | Key setup rules | Strikes (delta bands) |
-|---|---|---|---|
-| 1 | Bull call debit | HH-HL, BOS or OR breakout, EMA9>21>50, above VWAP, ADX≥20 rising, +DI>−DI, RSI>55, MACD>0, volume>avg, ATR≥median, no resistance inside reward | long 0.55–0.65, short 0.25–0.35 |
-| 2 | Bear put debit | mirror image (RSI<45, MACD<0) | long 0.55–0.65, short 0.25–0.35 |
-| 3 | Bull put credit | confirmed higher low, support tested, close>prev high, EMA20>50, above VWAP, RSI 50–65, ADX>18; short put below support | short 0.20–0.30, wing 0.05–0.15 |
-| 4 | Bear call credit | mirror image; short call above resistance | short 0.20–0.30, wing 0.05–0.15 |
-| 5 | Iron condor | ADX<20, flat or crossing EMAs, VWAP oscillation, narrowing bands, RSI 40–60, ATR contracting, IV>RV, ≥2 tests of each boundary; shorts outside range **and** expected move | shorts 0.15–0.20, wings 0.05–0.10 |
-| 6 | Iron butterfly | ADX<18, RSI 45–55, within 0.3 ATR of VWAP, ≥3 VWAP crossings, compressed bands, ATR falling, IV>RV | ATM body, symmetric wings, half the risk budget |
-| 7 | Calendar/diagonal | ADX<20, falling short-term RV, front IV ≥ 1.05× back IV | short near 0.40–0.55, long next expiry at the same or a more ITM strike (loss ≤ debit) |
-| 8 | Long iron butterfly | recent squeeze, now expanding, ATR rising, ADX turning up, volume, OR break, IV not rich; expected move must exceed the breakeven distance | long ATM, short symmetric wings |
+| # | Family | Entry rules | Strikes and management | Capital |
+|---|---|---|---|---|
+| 1-2 | **Buy call / buy put, lock with a hedge** (leg-in) | 09:35-13:30; EMA9>21>50 (calls) or EMA9<21<50 (puts); ADX ≥ 20 and rising; DI agrees; RSI 55-75 (25-45 for puts); break of structure or opening-range break; regime agrees | **Buy:** the highest-delta strike in 0.20-0.60 (0.30-0.60 from ₹1L) whose 20% stop risk fits the risk budget. **Before the hedge:** exit on a -20% premium stop, an index close back through EMA21, or 15:10. **At +40%:** sell the furthest-OTM same-expiry strike whose bid ≥ the long's entry price. The spread then can no longer lose money apart from charges. **After the hedge:** exit at 80% of the spread width or at 15:10 | All levels |
+| 3 | Bull put credit | Confirmed higher low, support tested, close > previous high, EMA20>50, above VWAP, RSI 50-65, ADX > 18; short put below support | Short 0.20-0.30, wing 0.05-0.15, narrowed to fit capital | ≥ ₹2L |
+| 4 | Bear call credit | Mirror image of the bull put; short call above resistance | Same as bull put | ≥ ₹2L |
 
-Structures are priced at ask for buys and bid for sells, including the round-trip charge model (`charges.py`).
+How each piece works:
+- **Leg-in sizing:** the stop risk (20% of premium plus charges) is budgeted against the capital tier's risk per trade. The full premium must fit deployable capital, which is 100% of equity by owner decision.
+- **Live hedging:** the lock is placed through `LiveMultiLegExecutionCoordinator.execute_protected_short`. It refuses unless the durable ledger shows the long fully open, with enough quantity, the same series and a further-OTM strike. A live leg-in close buys back the short first, then sells the long.
+- **Removed:** bull call debit and bear put debit spreads lost money in the replay. Iron condor, iron butterfly, calendar/diagonal and long iron butterfly never qualified in the replay period, so there is no evidence for them.
 
-They are rejected for any of the following:
-- spread or depth fails
-- Greeks are unavailable
-- costs exceed 40% of max profit
-- the short strike is inside an opposing level
-- reward/risk is too low (debit ≥ 1.1, credit/width ≥ 0.15, condor ≥ 0.12, IB ≥ 0.35)
-- one lot exceeds the budget
+### Strategy selection evidence (20 sessions, 2026-10-27 to 2026-11-27, archive bid/ask)
 
-Survivors are scored 0.25P+0.20L+0.15V+0.15G+0.10O+0.10R+0.05C, where P is the probability of profit under a lognormal at the legs' IV. Anything below `MIN_STRATEGY_SCORE` is rejected.
+Leg-in lock (+40% trigger, 20% stop), net of charges:
 
-**Capital fit.** If no in-band structure fits the budget, a second pass keeps the probability-defining leg in its band and narrows the protective or profit-cap leg until the worst case fits (verticals and condor only). The rationale is labelled "width narrowed to fit capital".
+| Capital | Net P&L | Profit factor |
+|---|---|---|
+| ₹30k | +₹3,559 | 1.30 |
+| ₹50k | +₹4,929 | 1.26 |
+| ₹1L | +₹2,506 | – |
+| ₹2L | +₹8,950 | – |
+| ₹5L | +₹11,710 | – |
 
-**Debit reward/risk.** The requirement's 1.3 minimum is incompatible with its own delta bands. At fair prices, debit/width ≈ the average delta of the two legs, so rr ≈ 1.0–1.6 before bid/ask. The default is 1.1 and is configurable.
+Win rate was about 41-45% of 22 trades; the strategy wins because its average win (₹2,644) is larger than its average loss (₹1,451).
+
+The credit spreads used a proxy VWAP built from option-chain volume, because the archive has no futures data:
+- **Bull put:** ₹2L +₹1,076 (5 of 6 won); ₹10L +₹4,726.
+- **Bear call:** ₹2L +₹420; ₹10L +₹2,402. At ₹50k both lost money, because charges outweighed the edge.
+
+### Engine validation replay (the integrated bot, 1-lot leg-in cap)
+
+| Capital | Trades | Won | Net after charges | Profit factor | Max drawdown |
+|---|---|---|---|---|---|
+| ₹30k | 15 | 8 | +₹2,309 | 1.35 | ₹2,757 |
+| ₹50k | 22 | 10 | +₹3,278 | 1.20 | ₹5,472 |
+| ₹2L | 24 | 9 | +₹3,037 | 1.10 | ₹13,640 |
+| ₹5L | 24 | 9 | +₹2,728 | 1.09 | ₹13,949 |
+| ₹10L | 24 | 9 | +₹2,728 | 1.09 | ₹13,949 |
+
+These figures are for the leg-in strategy only. Two settings came out of this replay:
+- **1-lot cap.** Uncapped multi-lot sizing at ₹5L-10L turned the same signals negative (−₹29.6k and −₹8.9k), so leg-in is capped at 1 lot (`leg_in_max_lots`).
+- **Credit spreads disabled by default.** Adding them helped at ₹2L (+₹6.2k) but hurt at ₹5L/₹10L (−₹4.8k, −₹1.2k). An open spread blocks same-direction leg-in winners, so the deploy default is `ENABLED_STRATEGIES=SENSEX_LEGIN_LOCK_CALL,SENSEX_LEGIN_LOCK_PUT`.
+
+**Caveat:** in all results, the first half of the period lost money and the second half made it. The sample is small, so this is not proof of a durable edge. Monitor it in paper.
 
 ## Capital and risk (`capital_policy.py`)
 

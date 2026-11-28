@@ -16,14 +16,10 @@ if TYPE_CHECKING:  # pragma: no cover
     from .engine import Engine
 
 STRATEGY_NAMES = {
-    "SENSEX_BULL_CALL_DEBIT": "Bull call spread",
-    "SENSEX_BEAR_PUT_DEBIT": "Bear put spread",
+    "SENSEX_LEGIN_LOCK_CALL": "Buy call, lock with hedge",
+    "SENSEX_LEGIN_LOCK_PUT": "Buy put, lock with hedge",
     "SENSEX_BULL_PUT_CREDIT": "Bull put spread",
     "SENSEX_BEAR_CALL_CREDIT": "Bear call spread",
-    "SENSEX_IRON_CONDOR": "Iron condor",
-    "SENSEX_IRON_BUTTERFLY": "Iron butterfly",
-    "SENSEX_CALENDAR_DIAGONAL": "Calendar / diagonal",
-    "SENSEX_LONG_IRON_BUTTERFLY": "Long iron butterfly",
 }
 MAX_CHARS = 3900
 

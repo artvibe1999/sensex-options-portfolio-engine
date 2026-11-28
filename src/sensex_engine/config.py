@@ -1,4 +1,5 @@
 """Validated application configuration with a paper-only startup invariant."""
+
 from typing import Any, Literal
 
 from pydantic import Field, SecretStr, field_validator
@@ -24,7 +25,8 @@ class Settings(BaseSettings):
     broker_account_statement_path: str = ""
     # Operator must verify against the current BSE/broker single-order ceiling.
     bfo_sensex_freeze_quantity: int = Field(1000, ge=1)
-    max_margin_utilization_pct: float = Field(0.70, gt=0, le=1)
+    # Owner decision 2026-11-28: up to 100% of capital may be deployed (paper and live).
+    max_margin_utilization_pct: float = Field(1.0, gt=0, le=1)
 
     # --- Strategy engine runtime -------------------------------------------------
     # Read-only path to the daily Kite token written by the primary bot (shared Kite

@@ -209,6 +209,49 @@ class EngineBook:
                 (position.mode, position.session_day),
             )
 
+    def add_hedge_leg(
+        self,
+        position_id: str,
+        *,
+        leg: BookLeg,
+        entry_costs: Decimal,
+        meta: dict[str, Any],
+    ) -> BookPosition:
+        """Append the protective short of a leg-in lock and recompute the risk profile.
+
+        net debit = long cost - short credit; max loss = max(net debit, 0) (the short is
+        at a further-OTM strike, so the spread can never be worth less than zero); max
+        profit = strike width x quantity - net debit.
+        """
+        position = self.get(position_id)
+        if position is None or position.status != "OPEN" or len(position.legs) != 1:
+            raise ValueError("Only an open single-leg position can be hedged")
+        long_leg = position.legs[0]
+        if leg.side != "SELL" or leg.right != long_leg.right or leg.quantity != long_leg.quantity:
+            raise ValueError("Hedge must be a same-type, same-quantity short")
+        width = abs(Decimal(str(leg.strike)) - Decimal(str(long_leg.strike)))
+        entry_net = position.entry_net - Decimal(str(leg.entry_price)) * leg.quantity
+        max_loss = max(entry_net, Decimal("0"))
+        max_profit = width * leg.quantity - entry_net
+        legs = [*position.legs, leg]
+        with self._conn() as conn:
+            conn.execute(
+                "UPDATE eng_positions SET legs=?, entry_net=?, entry_costs=?, max_loss=?, "
+                "max_profit=?, meta=? WHERE id=?",
+                (
+                    json.dumps([asdict(x) for x in legs]),
+                    str(entry_net),
+                    str(position.entry_costs + entry_costs),
+                    str(max_loss),
+                    str(max_profit),
+                    json.dumps(meta, default=str),
+                    position_id,
+                ),
+            )
+        updated = self.get(position_id)
+        assert updated is not None
+        return updated
+
     def update_meta(self, position_id: str, meta: dict[str, Any]) -> None:
         with self._conn() as conn:
             conn.execute(

@@ -6,7 +6,7 @@ from .capital import adaptive_risk_budget
 from .domain import PortfolioSnapshot, RiskDecision, StrategyCandidate
 
 # Only defined-debit long-volatility structures may open in an expansion regime.
-VOLATILITY_EXPANSION_STRATEGIES = frozenset({"SENSEX_LONG_IRON_BUTTERFLY"})
+VOLATILITY_EXPANSION_STRATEGIES: frozenset[str] = frozenset()  # none in the catalogue
 
 
 @dataclass(frozen=True)

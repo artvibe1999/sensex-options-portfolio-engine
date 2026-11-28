@@ -13,7 +13,7 @@ from decimal import Decimal
 from threading import Lock
 
 from .broker_submission import DurableBrokerSubmissionService
-from .domain import Position, StrategyCandidate, TradingMode
+from .domain import Position, Side, StrategyCandidate, TradingMode
 from .execution import ExecutionPhase, LegExecutionAction, build_leg_execution_plan
 from .order_lifecycle import OrderLifecycle, OrderState
 from .position_lifecycle import PositionLifecycle
@@ -84,8 +84,37 @@ class LiveMultiLegExecutionCoordinator:
             raise PermissionError("Normal live opening requires sized entry approval")
         return self._execute(position, phase)
 
+    def execute_protected_short(
+        self, position: Position, *, protecting_position_id: str,
+    ) -> LiveExecutionReport:
+        """Open ONE short option leg against an already fully-open, fill-confirmed long.
+
+        Used by the leg-in lock plan (buy first, hedge when in profit). The caller must
+        have verified strike/expiry geometry; here the durable ledger must show the
+        protective long fully OPEN with remaining quantity >= the short quantity.
+        """
+        with self._entry_lock:
+            if not self._enabled:
+                raise PermissionError("Live multi-leg execution is disabled")
+            if position.mode is not TradingMode.LIVE or len(position.legs) != 1:
+                raise ValueError("A protected short must be a single LIVE leg")
+            short = position.legs[0]
+            if short.side is not Side.SELL:
+                raise ValueError("Protected short leg must be a SELL")
+            protect = self._positions.snapshot(protecting_position_id)
+            if protect is None or protect["status"] != "OPEN" or not protect["is_fully_open"]:
+                raise PermissionError("Protective long position is not fully open")
+            quantity = short.lots * short.contract.lot_size
+            if not any(
+                str(leg["side"]).upper() == "BUY" and int(leg["remaining_quantity"]) >= quantity
+                for leg in protect["legs"]
+            ):
+                raise PermissionError("Short quantity exceeds the confirmed protective long")
+            return self._execute(position, ExecutionPhase.OPEN)
+
     def execute_sized(
         self, candidate: StrategyCandidate, *, max_lots: int, allocation_pct: Decimal,
+        stop_fraction: Decimal | None = None,
     ) -> LiveExecutionReport:
         """Normal entry path: serialize approval, sizing and immutable limit execution."""
         with self._entry_lock:
@@ -94,8 +123,9 @@ class LiveMultiLegExecutionCoordinator:
                 or self._entry_allowed is None or not self._entry_allowed()
             ):
                 raise PermissionError("Normal live entry gates are not satisfied")
+            extra = {} if stop_fraction is None else {"stop_fraction": stop_fraction}
             approved, prices = self._entry_sizing.approve(
-                candidate, max_lots=max_lots, allocation_pct=allocation_pct,
+                candidate, max_lots=max_lots, allocation_pct=allocation_pct, **extra,
             )
             if not self._entry_allowed():
                 raise PermissionError("Live entry permission changed during approval")
