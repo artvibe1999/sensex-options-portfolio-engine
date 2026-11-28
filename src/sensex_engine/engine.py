@@ -316,12 +316,15 @@ class Engine:
             now = self.clock()
             local = now.astimezone(IST)
             self.last_cycle_at = now
+            # Re-read the shared token file on EVERY cycle (also outside market hours), so
+            # the broker monitor and Telegram commands pick up a new daily Kite login at
+            # once instead of waiting for the next session.
+            info = self.token_refresh() if self.token_refresh is not None else None
             if local.weekday() >= 5 or not SESSION_START <= local.time() <= SESSION_END:
                 if local.time() > SESSION_END and self._summary_day != local.date():
                     self._daily_summary(local.date())
                 return
-            if self.token_refresh is not None:
-                info = self.token_refresh()
+            if info is not None:
                 if not getattr(info, "token", ""):
                     self.last_error = (
                         "No Kite access token (shared token file missing and no env token)"
