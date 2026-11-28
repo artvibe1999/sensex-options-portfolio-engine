@@ -22,7 +22,7 @@ The owner asked for only the strategies that showed after-charge profits in the 
 
 | # | Family | Entry rules | Strikes and management | Capital |
 |---|---|---|---|---|
-| 1-2 | **Buy call / buy put, lock with a hedge** (leg-in) | 09:35-13:30; EMA9>21>50 (calls) or EMA9<21<50 (puts); ADX ≥ 20 and rising; DI agrees; RSI 55-75 (25-45 for puts); break of structure or opening-range break; regime agrees | **Buy:** the highest-delta strike in 0.20-0.60 (0.30-0.60 from ₹1L) whose 20% stop risk fits the risk budget. **Before the hedge:** exit on a -20% premium stop, an index close back through EMA21, or 15:10. **At +40%:** sell the furthest-OTM same-expiry strike whose bid ≥ the long's entry price. The spread then can no longer lose money apart from charges. **After the hedge:** exit at 80% of the spread width or at 15:10 | All levels |
+| 1-2 | **Buy call / buy put, lock with a hedge** (leg-in) | 09:35-13:30; EMA9>21>50 (calls) or EMA9<21<50 (puts); ADX ≥ 20 and rising; DI agrees; RSI 55-75 (25-45 for puts); break of structure or opening-range break; regime agrees | **Buy:** the highest-delta strike in 0.20-0.60 (0.30-0.60 from ₹1L) whose 20% stop risk fits the risk budget. **Before the hedge:** exit on a -25% premium stop or at 15:10 (no EMA21 exit). **At +40%:** sell the furthest-OTM same-expiry strike whose bid ≥ the long's entry price, so the spread can no longer lose money apart from charges. **After the hedge:** hold to the 15:10 square-off (no width cap). One entry per direction per day; 1 lot | All levels |
 | 3 | Bull put credit | Confirmed higher low, support tested, close > previous high, EMA20>50, above VWAP, RSI 50-65, ADX > 18; short put below support | Short 0.20-0.30, wing 0.05-0.15, narrowed to fit capital | ≥ ₹2L |
 | 4 | Bear call credit | Mirror image of the bull put; short call above resistance | Same as bull put | ≥ ₹2L |
 
@@ -132,3 +132,22 @@ You get alerts for entries, exits, failures, daily stops, stale data, broker-mon
 ```
 
 `cd ~/sxhedge/deploy && docker compose up -d --build`. The compose file mounts `~/sxbot/data` read-only at `/shared/sxbot` for `token.json`.
+
+
+## 2-year walk-forward (2026-11-28) and current configuration
+
+The test ran on modelled option prices, using real SENSEX and India VIX 5-minute history (Dec 2024 - Nov 2026). The model was calibrated on the archive (ATM IV ≈ 1.124 × VIX, 12% median error). Year 1 is the period the design never saw.
+
+| Design | ₹30k: year 1 / year 2 | ₹50k: year 1 / year 2 | Profit factor |
+|---|---|---|---|
+| **Lock +40%, hold, -25% stop (deployed)** | +15,336 / +15,461 | +17,964 / +28,541 | 1.12-1.14 |
+| Lock +60%, hold | +6,753 / +14,532 | -105 / +44,188 | 1.09-1.11 |
+| Trailing stop | +11,734 / +36,748 | +5,407 / +51,099 | 1.15-1.21 |
+| Old (lock +40%, cap 80%, EMA21 exit) | +1,942 / +8,388 | -4,011 / +1,381 | 0.99-1.05 |
+
+What the test showed:
+- **Thin edge.** Average profit is about ₹50-150 per trade.
+- **Large drawdowns.** At ₹30k-₹50k the worst drawdown was over half the capital, with up to 11 losses in a row.
+- **No ₹5k-per-trade strategy.** Only about 12% of trades reached ₹5k, even at ₹2L or more.
+
+The engine stays PAPER only.

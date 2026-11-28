@@ -202,11 +202,12 @@ class StrategyConfig:
     min_credit_to_width: float = 0.15  # credit verticals
     delta_tolerance: float = 0.05  # widen bands once if no listed strike fits
     # Leg-in lock (tested variant "lock t40 s20"): premium stop, hedge trigger, target.
-    # 2026-11-28 owner choice "hedge at +60%" (research variant "prem25 + lock60, hold"):
-    # -25% premium stop, no EMA21 exit, lock at +60% with the furthest strike whose bid >=
+    # 2026-11-28 2-year walk-forward (modelled prices): "prem25 + lock40, hold" was the only
+    # lock design positive in BOTH years at Rs 30k/50k with the smallest drawdown:
+    # -25% premium stop, no EMA21 exit, lock at +40% with the furthest strike whose bid >=
     # entry, then hold the locked spread to the 15:10 square-off (no width target).
     leg_in_stop: float = 0.25
-    leg_in_hedge_trigger: float = 0.60
+    leg_in_hedge_trigger: float = 0.40
     leg_in_target_width: float | None = None
     leg_in_ema_exit: bool = False
     leg_in_max_delta: float = 0.60

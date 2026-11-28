@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import Decimal
-from threading import Lock
+from threading import Lock, RLock
 
 from .broker_submission import DurableBrokerSubmissionService
 from .domain import Position, Side, StrategyCandidate, TradingMode
@@ -78,6 +78,9 @@ class LiveMultiLegExecutionCoordinator:
         self._entry_allowed = entry_allowed
         self._require_entry_approval = require_entry_approval
         self._entry_lock = Lock()
+        # Serialises every OPEN/CLOSE across threads (engine cycle, emergency close-all),
+        # so two closers can never both see remaining quantity and double-sell.
+        self._execution_lock = RLock()
 
     def execute(self, position: Position, phase: ExecutionPhase) -> LiveExecutionReport:
         if phase is ExecutionPhase.OPEN and self._require_entry_approval:
@@ -133,6 +136,13 @@ class LiveMultiLegExecutionCoordinator:
             return self._execute(position, ExecutionPhase.OPEN, opening_prices=prices)
 
     def _execute(
+        self, position: Position, phase: ExecutionPhase,
+        *, opening_prices: dict[int, Decimal] | None = None,
+    ) -> LiveExecutionReport:
+        with self._execution_lock:
+            return self._execute_locked(position, phase, opening_prices=opening_prices)
+
+    def _execute_locked(
         self, position: Position, phase: ExecutionPhase,
         *, opening_prices: dict[int, Decimal] | None = None,
     ) -> LiveExecutionReport:

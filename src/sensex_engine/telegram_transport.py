@@ -18,6 +18,19 @@ logger = logging.getLogger(__name__)
 COMMANDS = ("start", *(name for name, _, _ in COMMAND_HELP))
 
 
+def _run_emergency(emergency: Any, engine: Any) -> Any:
+    """Run close-all while the engine cycle cannot act on the same positions."""
+    if engine is None:
+        return emergency.execute()
+    with engine._lock:
+        report = emergency.execute()
+        try:
+            engine.sync_live_book("emergency close-all")
+        except Exception:
+            logger.exception("Could not sync live engine book after emergency close-all")
+    return report
+
+
 async def dispatch_command(
     update: Any,
     context: Any,
@@ -66,7 +79,7 @@ async def dispatch_command(
     broker_ready, risk_clear = False, False
     if command in {"/resume", "/confirm_live"} and readiness_provider is not None:
         try:
-            broker_ready, risk_clear = readiness_provider()
+            broker_ready, risk_clear = await asyncio.to_thread(readiness_provider)
         except Exception:
             broker_ready, risk_clear = False, False
 
@@ -89,7 +102,7 @@ async def dispatch_command(
                     )
                     outcome = "BLOCKED"
                 else:
-                    report = await asyncio.to_thread(emergency.execute)
+                    report = await asyncio.to_thread(_run_emergency, emergency, engine)
                     response = report.to_text()
                     outcome = "ACCEPTED" if report.completed else "INCOMPLETE"
                 if engine is not None:
@@ -104,7 +117,10 @@ async def dispatch_command(
         else:
             # Route on the normalised first word but keep arguments (e.g. /close <id> confirm).
             arguments = raw_text.strip().split()[1:]
-            response = operations.handle(
+            # Off the event loop: handlers may wait for the engine lock or call Kite, and a
+            # blocked loop would also freeze /emergency and the broker monitor.
+            response = await asyncio.to_thread(
+                operations.handle,
                 " ".join([command, *arguments]),
                 user_id=user_id,
                 chat_id=chat_id,

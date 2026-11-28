@@ -35,9 +35,10 @@ COMMAND_HELP: tuple[tuple[str, str, str], ...] = (
     ),
     (
         "capital",
-        "Equity, start-of-day, peak, open risk, margin room",
-        "Dynamic equity (paper compounds; live = Kite funds + engine P&L) and the capital-tier "
-        "risk policy in force.",
+        "Show capital; /capital 200000 sets paper capital",
+        "Shows equity, start-of-day, peak, open risk and the risk policy. Paper equity starts "
+        "from the Zerodha balance on first run and compounds with paper P&L; /capital <amount> "
+        "(e.g. /capital 200000, 2.5L) sets paper capital. Live equity is read from Zerodha.",
     ),
     (
         "risk",
@@ -181,7 +182,8 @@ class OperationsController:
         if normalized == "/paper":
             self.mode.force_paper()
             self.paused = True
-            return "Paper mode active; entries remain paused until /resume."
+            return ("Paper mode active: live trading is off and the live gates are closed. "
+                    "Paper entries continue; send /pause to stop them.")
         if normalized == "/live":
             self.mode.request_live(user_id, authorized=True)
             return (
@@ -228,6 +230,12 @@ class OperationsController:
             return "Entries resumed after readiness checks."
         if normalized == "/positions" and self.engine is not None:
             return self.engine.positions_text()
+        if normalized == "/capital" and self.engine is not None and len(command.split()) > 1:
+            # "/capital 200000" sets paper capital (same as /setcapital).
+            amount = parse_amount(command.split(maxsplit=1)[1])
+            if amount is None:
+                return "Usage: /capital <amount>  e.g. /capital 200000, /capital 2.5L"
+            return self.engine.set_paper_capital(amount, user_id=user_id)
         if normalized in {"/pnl", "/capital", "/risk"} and self.engine is not None:
             if normalized == "/pnl":
                 return self.engine.pnl_text()

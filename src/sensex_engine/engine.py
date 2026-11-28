@@ -48,6 +48,7 @@ from .strategies import (
 logger = logging.getLogger(__name__)
 SESSION_START, SESSION_END = time(9, 15), time(15, 30)
 MAX_SPOT_AGE_SECONDS = 120
+MARK_MAX_AGE_SECONDS = 180  # option quotes older than this cannot mark or close a position
 
 
 @dataclass
@@ -89,7 +90,11 @@ class Notifier:
 
 
 class LiveEntryError(RuntimeError):
-    pass
+    """A live entry/hedge that may have left broker exposure (halts live trading)."""
+
+
+class LiveEntryRejected(RuntimeError):
+    """Rejected before any order was sent (stale quote, gate, sizing): safe to skip."""
 
 
 class LiveBridge:
@@ -114,20 +119,24 @@ class LiveBridge:
         self, proposal: Proposal, *, lots: int, policy: RiskPolicy, allocation_pct: Decimal
     ) -> tuple[str, int, dict[int, float]]:
         if proposal.multi_expiry:
-            raise LiveEntryError("Multi-expiry live sizing is not supported; paper only")
+            raise LiveEntryRejected("Multi-expiry live sizing is not supported; paper only")
         self.sizing.risk = RiskEngine(policy.limits)
         candidate = proposal.to_candidate(1)
         tokens = [leg.contract.instrument_token for leg in candidate.legs]
         quotes = self.adapter.quotes(tokens)
         if len(quotes) != len(tokens):
-            raise LiveEntryError("Fresh quotes unavailable for every leg")
+            raise LiveEntryRejected("Fresh quotes unavailable for every leg")
         candidate = replace(candidate, data_timestamp=min(q.timestamp for q in quotes.values()))
         extra = {}
         if proposal.sizing_risk_per_lot is not None:
             extra["stop_fraction"] = Decimal(str(proposal.exit_plan.stop_loss_pct))
-        report = self.coordinator.execute_sized(
-            candidate, max_lots=lots, allocation_pct=allocation_pct, **extra
-        )
+        try:
+            report = self.coordinator.execute_sized(
+                candidate, max_lots=lots, allocation_pct=allocation_pct, **extra
+            )
+        except (ValueError, PermissionError) as exc:
+            # Raised by sizing/approval before the coordinator submits anything.
+            raise LiveEntryRejected(str(exc)) from exc
         snap = self.positions.snapshot(report.position_id)
         if not report.completed or snap is None:
             raise LiveEntryError(
@@ -270,7 +279,7 @@ class Engine:
         self.last_error: str = ""
         self.last_cycle_at: datetime | None = None
         self.last_snapshot: FeedSnapshot | None = None
-        self.last_policy: RiskPolicy | None = None
+        self.policies: dict[str, RiskPolicy] = {}
         self._last_bar: datetime | None = None
         self._summary_day: date | None = None
         self._stale_alerted = False
@@ -298,6 +307,18 @@ class Engine:
     # ----------------------------------------------------------------- loop
     def run_forever(self) -> None:
         logger.info("Engine loop started (cycle %ss)", self.config.cycle_seconds)
+        if self.live is not None:
+            try:  # crash-window guard: re-attach live fills the book never recorded
+                if self.token_refresh is not None:
+                    self.token_refresh()
+                self.feed.refresh_contracts(self.clock(), force=True)
+                self.adopt_orphan_live_positions()
+            except Exception:
+                logger.exception("Startup live-position adoption check failed")
+                self.notifier.send(
+                    "[LIVE] Startup check for unrecorded live positions could not run; "
+                    "verify Kite positions manually before /live."
+                )
         while not self._stop.is_set():
             started = _time.monotonic()
             try:
@@ -395,7 +416,14 @@ class Engine:
             quote = snap.quotes.get(leg.instrument_token)
             if quote is None:
                 return None
-            if leg.side == "BUY":  # close by selling at bid; no bid means no value
+            # A momentarily empty book or a stale tick is "no price", never a zero mark:
+            # zero would trigger stops / the daily loss stop on a data glitch.
+            age = (snap.as_of - quote.timestamp).total_seconds()
+            if age > MARK_MAX_AGE_SECONDS:
+                return None
+            if leg.side == "BUY":  # close by selling at bid
+                if quote.bid <= 0:
+                    return None
                 marks[leg.instrument_token] = float(quote.bid)
             else:  # close by buying at ask
                 if quote.ask <= 0:
@@ -443,13 +471,21 @@ class Engine:
                 )
             else:
                 base = Decimal(base_raw)
-            start = base + self.book.realized_total("paper")
+            # Start of day = base + P&L realised BEFORE today (today's is added live).
+            start = (
+                base
+                + self.book.realized_total("paper")
+                - self.book.realized_total("paper", day=today.isoformat())
+            )
         else:
             # LIVE capital is always the Zerodha account's own funds (owner decision):
             # start-of-day balance (opening balance + intraday pay-in), which does not shrink
             # when this engine's positions use margin. Deployable margin is additionally
             # capped by the broker's current available funds (see portfolio()).
             start = self._kite_start_of_day_funds()
+            return Decimal(
+                self.book.start_day(mode, today, start, carry_peak=False)["start_equity"]
+            )
         return Decimal(self.book.start_day(mode, today, start)["start_equity"])
 
     def _unrealized(self, positions: list[BookPosition], snap: FeedSnapshot | None) -> Decimal:
@@ -472,8 +508,18 @@ class Engine:
         row = self.book.equity_day(mode, today) or {}
         peak = max(Decimal(row.get("peak_equity", sod)), equity)
         self.book.update_peak(mode, today, equity)
-        week_ref = self.book.period_reference(mode, today - timedelta(days=today.weekday())) or sod
-        month_ref = self.book.period_reference(mode, today.replace(day=1)) or sod
+        week_start = today - timedelta(days=today.weekday())
+        month_start = today.replace(day=1)
+        if mode == "live":
+            # The Zerodha balance also moves with deposits, withdrawals, the other bot and
+            # manual trades; only this engine's own losses count towards its drawdown.
+            week_dd = self._own_drawdown(mode, week_start, unrealized) / sod
+            month_dd = self._own_drawdown(mode, month_start, unrealized) / sod
+        else:
+            week_ref = self.book.period_reference(mode, week_start) or sod
+            month_ref = self.book.period_reference(mode, month_start) or sod
+            week_dd = max(Decimal("0"), (week_ref - equity) / week_ref)
+            month_dd = max(Decimal("0"), (month_ref - equity) / month_ref)
         policy = self._policy(equity, peak)
         used_margin = sum(Decimal(str(p.meta.get("margin", p.max_loss))) for p in open_positions)
         family: dict[str, Decimal] = {}
@@ -492,16 +538,33 @@ class Engine:
             open_max_loss=sum((self._open_risk(p) for p in open_positions), Decimal("0")),
             daily_realized_pnl=realized_today,
             daily_unrealized_pnl=unrealized,
-            weekly_drawdown_pct=max(Decimal("0"), (week_ref - equity) / week_ref),
-            monthly_drawdown_pct=max(Decimal("0"), (month_ref - equity) / month_ref),
+            weekly_drawdown_pct=week_dd,
+            monthly_drawdown_pct=month_dd,
             open_positions=len(open_positions),
             entries_today=int(row.get("entries", 0)),
             peak_equity=peak,
             start_of_day_equity=sod,
             strategy_open_risk=tuple(sorted(family.items())),
         )
-        self.last_policy = policy
+        self.policies[mode] = policy
         return snapshot, policy
+
+    @property
+    def last_policy(self) -> RiskPolicy | None:
+        """Risk policy of the mode the engine is trading in now."""
+        return self.policies.get(self.mode)
+
+    def _own_drawdown(self, mode: str, since: date, unrealized: Decimal) -> Decimal:
+        """Drawdown from this engine's OWN P&L since ``since`` (rupees, >= 0)."""
+        closed = sorted(
+            self.book.closed_positions(mode=mode, since_day=since.isoformat()),
+            key=lambda p: p.closed_at or "",
+        )
+        cum = peak = Decimal("0")
+        for p in closed:
+            cum += p.realized_pnl or Decimal("0")
+            peak = max(peak, cum)
+        return max(Decimal("0"), peak - (cum + unrealized))
 
     @staticmethod
     def _open_risk(p: BookPosition) -> Decimal:
@@ -564,13 +627,23 @@ class Engine:
             if daily <= -limit and not all_priced:
                 self.last_error = "daily-stop check deferred: a leg has no executable quote"
             elif daily <= -limit:
-                self.book.set_halted(mode, today)
+                first = not (self.book.equity_day(mode, today) or {}).get("halted")
+                if first:
+                    self.book.set_halted(mode, today)
                 for p in positions:
-                    self._close(p, snap, f"daily loss stop Rs{limit:,.0f} reached", now)
-                self.notifier.send(
-                    f"[{mode.upper()}] Daily loss stop hit (Rs{daily:,.0f}); "
-                    "all positions closed, entries halted for today."
-                )
+                    if p.status in {"OPEN"}:  # failed live closes (ERROR) need the operator
+                        self._close(p, snap, f"daily loss stop Rs{limit:,.0f} reached", now)
+                if first:
+                    left = [p for p in self.book.open_positions(mode)]
+                    self.notifier.send(
+                        f"[{mode.upper()}] Daily loss stop hit (Rs{daily:,.0f}); entries halted "
+                        "for today. "
+                        + (
+                            "All positions closed."
+                            if not left
+                            else f"{len(left)} position(s) could NOT be closed - check /positions."
+                        )
+                    )
                 continue
             for p in positions:
                 if p.status == "ERROR":
@@ -690,14 +763,18 @@ class Engine:
         price = float(quote.bid)
         meta = dict(p.meta)
         if p.mode == "live":
-            if self.live is None:
-                return
+            if self.live is None or meta.get("hedge_attempted"):
+                return  # exactly one live hedge attempt per position
+            meta["hedge_attempted"] = now.isoformat()
+            self.book.update_meta(p.id, meta)  # persisted before any order is sent
+            p.meta = meta
             try:
                 hedge_id, price = self.live.hedge(p, contract, long_leg.quantity)
             except Exception as exc:
                 self.notifier.send(
-                    f"[LIVE] HEDGE NOT PLACED for {p.id}: {exc}. Long leg "
-                    "remains under its stop; check Kite."
+                    f"[LIVE] HEDGE NOT PLACED for {p.id}: {exc}. Not retried; the long leg "
+                    "stays under its stop and 15:10 square-off. Check Kite for any partial "
+                    "short and use /emergency if needed."
                 )
                 return
             meta["hedge_broker_position_id"] = hedge_id
@@ -747,10 +824,13 @@ class Engine:
             )
         except Exception as exc:
             self.book.set_status(p.id, "ERROR" if p.mode == "live" else p.status, None)
-            self.notifier.send(
-                f"[{p.mode.upper()}] EXIT FAILED {p.strategy_id} {p.id}: {exc}. "
-                + ("Manual check required." if p.mode == "live" else "Will retry.")
-            )
+            if not p.meta.get("exit_fail_alerted"):  # alert once per position, not per cycle
+                p.meta["exit_fail_alerted"] = now.isoformat()
+                self.book.update_meta(p.id, p.meta)
+                self.notifier.send(
+                    f"[{p.mode.upper()}] EXIT FAILED {p.strategy_id} {p.id}: {exc}. "
+                    + ("Manual check required." if p.mode == "live" else "Retrying each cycle.")
+                )
             return
         legs = "\n".join(
             f"  {leg.side} {leg.tradingsymbol}: {leg.entry_price} -> {prices[leg.instrument_token]}"
@@ -791,14 +871,18 @@ class Engine:
             # equity = base + all realised paper P&L, so solve for the base.
             base = amount - self.book.realized_total("paper")
             self.book.set_state("paper_base_capital", str(base))
-            self.book.reset_equity_reference("paper", today, amount)
+            # portfolio() adds today's realised P&L on top of the day start, so start the
+            # day at amount - realised_today: equity then reads exactly ``amount``.
+            self.book.reset_equity_reference(
+                "paper", today, amount - self.book.realized_total("paper", day=today.isoformat())
+            )
             self.book.log_decision(
                 "paper_capital_set",
                 {"amount": str(amount), "previous_base": previous, "user": user_id},
                 now,
             )
             policy = self._policy(amount, amount)
-            self.last_policy = policy if self.mode == "paper" else self.last_policy
+            self.policies["paper"] = policy
             self.notifier.send(f"[PAPER] Capital set to {rs(amount, 2)} by operator.")
             return "\n".join(
                 [
@@ -810,6 +894,126 @@ class Engine:
                     *policy_lines(policy),
                 ]
             )
+
+    def sync_live_book(self, reason: str) -> int:
+        """Close live book rows whose durable broker positions are already flat."""
+        if self.live is None:
+            return 0
+        synced = 0
+        for p in self.book.open_positions("live"):
+            ids = [i for i in (p.broker_position_id, p.meta.get("hedge_broker_position_id")) if i]
+            snaps = [self.live.positions.snapshot(str(i)) for i in ids]
+            if not snaps or any(s is None or s["status"] != "CLOSED" for s in snaps):
+                continue
+            prices = {}
+            for s in snaps:
+                for leg in s["legs"]:
+                    if leg.get("close_average_price") is not None:
+                        prices[int(leg["instrument_token"])] = float(leg["close_average_price"])
+            if any(leg.instrument_token not in prices for leg in p.legs):
+                continue
+            self.book.close_position(
+                p.id,
+                exit_prices=prices,
+                exit_costs=self._exit_costs(p, prices),
+                reason=reason,
+                closed_at=self.clock(),
+            )
+            synced += 1
+        return synced
+
+    def adopt_orphan_live_positions(self) -> list[str]:
+        """Startup guard: durable LIVE positions the engine book does not know about.
+
+        Covers a crash between a confirmed live fill and the book write. A single long
+        leg-in leg is adopted (stop / hedge / 15:10 square-off resume); anything else is
+        reported for manual handling.
+        """
+        if self.live is None:
+            return []
+        known = set()
+        for p in self.book.open_positions("live") + self.book.closed_positions(mode="live"):
+            known.update(
+                i for i in (p.broker_position_id, p.meta.get("hedge_broker_position_id")) if i
+            )
+        reports = []
+        for snap in self.live.positions.active_snapshots():
+            pid = str(snap.get("position_id"))
+            if snap.get("mode") != "live" or pid in known:
+                continue
+            legs = [leg for leg in snap["legs"] if int(leg.get("remaining_quantity", 0)) > 0]
+            contract = self.feed.by_token.get(int(legs[0]["instrument_token"])) if legs else None
+            if (
+                snap["strategy_id"] in LEG_IN
+                and len(legs) == 1
+                and legs[0]["side"] == "BUY"
+                and contract is not None
+                and legs[0].get("open_average_price")
+            ):
+                price = Decimal(str(legs[0]["open_average_price"]))
+                qty = int(legs[0]["remaining_quantity"])
+                cfg = self.config.strategy
+                plan = {
+                    "kind": "leg_in",
+                    "profit_target_pct": 0.0,
+                    "profit_basis": "lock_width",
+                    "stop_loss_pct": cfg.leg_in_stop,
+                    "hedge_trigger": cfg.leg_in_hedge_trigger,
+                    "lock_target_width": cfg.leg_in_target_width,
+                    "ema_exit": cfg.leg_in_ema_exit,
+                    "alignment": "bullish" if contract.right.value == "CE" else "bearish",
+                }
+                now = self.clock()
+                self.book.open_position(
+                    BookPosition(
+                        id=new_position_id(),
+                        mode="live",
+                        strategy_id=snap["strategy_id"],
+                        status="OPEN",
+                        opened_at=now.isoformat(),
+                        session_day=now.astimezone(IST).date().isoformat(),
+                        lots=qty // contract.lot_size,
+                        lot_size=contract.lot_size,
+                        entry_net=price * qty,
+                        max_loss=price * qty,
+                        max_profit=None,
+                        entry_costs=leg_charges(
+                            side="BUY", price=price, quantity=qty, schedule=self.config.charges
+                        ).total,
+                        legs=[
+                            BookLeg(
+                                contract.instrument_token,
+                                contract.tradingsymbol,
+                                contract.right.value,
+                                float(contract.strike),
+                                contract.expiry.isoformat(),
+                                "BUY",
+                                qty,
+                                float(price),
+                                0.0,
+                            )
+                        ],
+                        exit_plan=plan,
+                        meta={
+                            "stage": "single",
+                            "adopted": True,
+                            "managed_risk": str(price * qty * Decimal(str(cfg.leg_in_stop))),
+                        },
+                        broker_position_id=pid,
+                    )
+                )
+                reports.append(f"adopted {pid} ({contract.tradingsymbol} x{qty})")
+            else:
+                reports.append(f"UNMANAGED durable live position {pid} ({snap['strategy_id']})")
+        if reports:
+            self.notifier.send(
+                "[LIVE] Startup check found live positions not in the engine "
+                "book:\n"
+                + "\n".join(reports)
+                + "\nAdopted legs are managed again; anything UNMANAGED needs "
+                "manual handling (/emergency)."
+            )
+        return reports
 
     def close_all(self, mode: str, reason: str) -> int:
         """Operator-initiated controlled close (paper; live goes through emergency close-all)."""
@@ -880,7 +1084,8 @@ class Engine:
         }
         result = arbitrate(
             evaluations,
-            open_strategies=[p.strategy_id for p in open_positions] + sorted(traded_today),
+            open_strategies=[p.strategy_id for p in open_positions],
+            exclude=frozenset(traded_today),
             max_concurrent=policy.tier.max_concurrent_positions,
         )
         blocked = ""
@@ -996,6 +1201,15 @@ class Engine:
                     policy=policy,
                     allocation_pct=self.config.max_margin_utilization,
                 )
+            except LiveEntryRejected as exc:
+                # Nothing was sent: skip this signal, keep trading.
+                self.last_arbitration = f"live entry skipped: {exc}"[:200]
+                self.book.log_decision(
+                    "live_entry_rejected",
+                    {"strategy": proposal.strategy_id, "error": str(exc)},
+                    now,
+                )
+                return
             except Exception as exc:
                 # Possible residual broker exposure: stop all new entries, leave live mode,
                 # and hand over to the operator / emergency close-all (durable ledger).

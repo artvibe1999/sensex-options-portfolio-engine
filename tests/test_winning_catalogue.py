@@ -53,7 +53,7 @@ def test_leg_in_picks_highest_delta_strike_that_fits_the_capital(equity, budget,
     assert proposal.net_debit_per_lot <= Decimal(equity)
     # Stop-managed: risk = 20% of premium + charges, far below the premium itself.
     assert proposal.sizing_risk_per_lot < proposal.max_loss_per_lot
-    assert proposal.exit_plan.kind == "leg_in" and proposal.exit_plan.hedge_trigger == 0.60
+    assert proposal.exit_plan.kind == "leg_in" and proposal.exit_plan.hedge_trigger == 0.40
     smaller, _, _ = S.build_leg_in_call(
         ctx(bullish_state(), equity), S.StrategyConfig(), Decimal(budget) / 2
     )
@@ -380,7 +380,7 @@ def test_plus60_variant_holds_lock_to_eod_without_ema_exit():
     plan = S.build_leg_in_call(ctx(bullish_state(), 50000), S.StrategyConfig(), Decimal("2000"))[
         0
     ].exit_plan
-    assert plan.stop_loss_pct == 0.25 and plan.hedge_trigger == 0.60
+    assert plan.stop_loss_pct == 0.25 and plan.hedge_trigger == 0.40
     assert plan.lock_target_width is None and plan.ema_exit is False
 
 

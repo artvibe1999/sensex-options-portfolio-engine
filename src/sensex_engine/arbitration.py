@@ -31,13 +31,18 @@ def arbitrate(
     *,
     open_strategies: list[str],
     max_concurrent: int,
+    exclude: frozenset[str] = frozenset(),
 ) -> ArbitrationResult:
+    """``exclude``: strategies that may not enter again today (not counted as open)."""
     if len(open_strategies) >= max_concurrent:
         return ArbitrationResult(None, f"max concurrent positions ({max_concurrent}) open", ())
     open_dirs = {DIRECTION.get(s, "unknown") for s in open_strategies}
     considered: list[str] = []
     for ev in sorted(evaluations, key=lambda e: e.priority):
         if not ev.eligible:
+            continue
+        if ev.strategy_id in exclude:
+            considered.append(f"{ev.strategy_id}: already traded today (one entry per day)")
             continue
         direction = DIRECTION[ev.strategy_id]
         if ev.strategy_id in open_strategies:

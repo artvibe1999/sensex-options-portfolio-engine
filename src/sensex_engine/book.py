@@ -372,8 +372,15 @@ class EngineBook:
             ).fetchone()
         return dict(row) if row else None
 
-    def start_day(self, mode: str, day: date, start_equity: Decimal) -> dict[str, Any]:
-        """Create the day's row once (idempotent); peak carries forward."""
+    def start_day(
+        self, mode: str, day: date, start_equity: Decimal, *, carry_peak: bool = True
+    ) -> dict[str, Any]:
+        """Create the day's row once (idempotent).
+
+        ``carry_peak`` carries the previous peak forward (paper: equity only changes by
+        engine P&L). For live, the account's funds also move with deposits, withdrawals
+        and other trading, so the peak restarts each day.
+        """
         existing = self.equity_day(mode, day)
         if existing:
             return existing
@@ -383,7 +390,11 @@ class EngineBook:
                 "ORDER BY day DESC LIMIT 1",
                 (mode, day.isoformat()),
             ).fetchone()
-            peak = max(start_equity, Decimal(prev["peak_equity"])) if prev else start_equity
+            peak = (
+                max(start_equity, Decimal(prev["peak_equity"]))
+                if prev and carry_peak
+                else start_equity
+            )
             conn.execute(
                 "INSERT OR IGNORE INTO eng_equity(mode,day,start_equity,peak_equity) "
                 "VALUES(?,?,?,?)",

@@ -285,3 +285,36 @@ def test_setcapital_resets_paper_equity_and_policy(tmp_path):
     assert "Not changed" in ops.handle("/setcapital 100000", user_id=1, chat_id=2)
     with pytest.raises(PermissionError):
         ops.handle("/setcapital 100000", user_id=9, chat_id=2)
+
+
+def test_capital_command_with_amount_sets_paper_capital(tmp_path):
+    engine, _ = _engine(tmp_path, FakeKite(funds=50000))
+    ops = _ops(engine)
+    reply = ops.handle("/capital 2.5L", user_id=1, chat_id=2)
+    assert "Paper capital set to Rs 250,000.00" in reply
+    assert Decimal(engine.book.get_state("paper_base_capital")) == Decimal("250000")
+    assert "Usage" in ops.handle("/capital lots", user_id=1, chat_id=2)
+
+
+def test_live_drawdown_ignores_account_withdrawals(tmp_path):
+    fk = FakeKite(funds=30842.6)
+    engine, _ = _engine(tmp_path, fk)
+    engine.feed.refresh_contracts(NOW)
+    yesterday = NOW - timedelta(days=1)
+    engine.portfolio("live", yesterday)
+    fk.funds = 1572.6  # money withdrawn / used elsewhere overnight - not an engine loss
+    snap, policy = engine.portfolio("live", NOW)
+    assert snap.net_liquidation_equity == Decimal("1572.6")
+    assert snap.weekly_drawdown_pct == 0 and snap.monthly_drawdown_pct == 0
+    assert snap.peak_equity == Decimal("1572.6") and policy.drawdown_pct == 0
+
+
+def test_status_policy_follows_the_active_mode(tmp_path):
+    fk = FakeKite(funds=500000)
+    engine, _ = _engine(tmp_path, fk)
+    engine.feed.refresh_contracts(NOW)
+    engine.book.set_state("paper_base_capital", "50000")
+    engine.portfolio("paper", NOW)
+    engine.portfolio("live", NOW)  # e.g. readiness evaluated live afterwards
+    assert engine.mode == "paper"
+    assert engine.last_policy.equity == Decimal("50000")
