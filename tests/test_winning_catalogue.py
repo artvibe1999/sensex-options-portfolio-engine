@@ -53,7 +53,7 @@ def test_leg_in_picks_highest_delta_strike_that_fits_the_capital(equity, budget,
     assert proposal.net_debit_per_lot <= Decimal(equity)
     # Stop-managed: risk = 20% of premium + charges, far below the premium itself.
     assert proposal.sizing_risk_per_lot < proposal.max_loss_per_lot
-    assert proposal.exit_plan.kind == "leg_in" and proposal.exit_plan.hedge_trigger == 0.40
+    assert proposal.exit_plan.kind == "leg_in" and proposal.exit_plan.hedge_trigger == 0.60
     smaller, _, _ = S.build_leg_in_call(
         ctx(bullish_state(), equity), S.StrategyConfig(), Decimal(budget) / 2
     )
@@ -270,7 +270,7 @@ def test_live_bridge_leg_in_passes_stop_fraction_and_guards_hedge_geometry():
     )
     policy = risk_policy(equity=Decimal("500000"), peak_equity=Decimal("500000"))
     pid, lots, fills = bridge.open(proposal, lots=1, policy=policy, allocation_pct=Decimal("1"))
-    assert coordinator.calls[0] == ("open", {"stop_fraction": Decimal("0.2")})
+    assert coordinator.calls[0] == ("open", {"stop_fraction": Decimal("0.25")})
     long_contract = proposal.legs[0][0].contract
     book_pos = BookPosition(
         id="b",
@@ -374,3 +374,23 @@ def test_entry_sizing_stop_fraction_only_for_single_long():
 def test_leg_in_is_capped_at_one_lot_even_with_large_capital(tmp_path, monkeypatch):
     engine, fk, clock, alerts, p = _enter(tmp_path, monkeypatch, funds=1000000)
     assert p.lots == 1
+
+
+def test_plus60_variant_holds_lock_to_eod_without_ema_exit():
+    plan = S.build_leg_in_call(ctx(bullish_state(), 50000), S.StrategyConfig(), Decimal("2000"))[
+        0
+    ].exit_plan
+    assert plan.stop_loss_pct == 0.25 and plan.hedge_trigger == 0.60
+    assert plan.lock_target_width is None and plan.ema_exit is False
+
+
+def test_one_leg_in_entry_per_direction_per_day(tmp_path, monkeypatch):
+    engine, fk, clock, alerts, p = _enter(tmp_path, monkeypatch)
+    _tick(engine, fk, clock, 30, SPOT - 300)  # premium stop
+    assert engine.book.get(p.id).status == "CLOSED"
+    fk.spot = SPOT
+    for minutes in (5, 10, 15):  # new bars with the same (stubbed) signal
+        clock.now = fk.now = NOW + timedelta(minutes=minutes)
+        engine.cycle()
+    assert not engine.book.open_positions("paper")
+    assert len(engine.book.closed_positions(mode="paper")) == 1

@@ -86,6 +86,7 @@ class ExitPlan:
     kind: str = "standard"  # "standard" | "leg_in"
     hedge_trigger: float | None = None  # leg-in: lock when long premium is up this fraction
     lock_target_width: float | None = None  # leg-in: exit locked spread at this x width
+    ema_exit: bool = True  # leg-in: exit on an index close back through EMA21 (pre-lock)
 
 
 @dataclass(frozen=True)
@@ -201,9 +202,13 @@ class StrategyConfig:
     min_credit_to_width: float = 0.15  # credit verticals
     delta_tolerance: float = 0.05  # widen bands once if no listed strike fits
     # Leg-in lock (tested variant "lock t40 s20"): premium stop, hedge trigger, target.
-    leg_in_stop: float = 0.20
-    leg_in_hedge_trigger: float = 0.40
-    leg_in_target_width: float = 0.80
+    # 2026-11-28 owner choice "hedge at +60%" (research variant "prem25 + lock60, hold"):
+    # -25% premium stop, no EMA21 exit, lock at +60% with the furthest strike whose bid >=
+    # entry, then hold the locked spread to the 15:10 square-off (no width target).
+    leg_in_stop: float = 0.25
+    leg_in_hedge_trigger: float = 0.60
+    leg_in_target_width: float | None = None
+    leg_in_ema_exit: bool = False
     leg_in_max_delta: float = 0.60
     leg_in_min_delta_small: float = 0.20  # below Rs 1L: cheaper OTM strikes fit the budget
     leg_in_min_delta: float = 0.30
@@ -807,7 +812,7 @@ def build_leg_in(
     )
     _, liquidity, _ = _leg_liquidity(a, Side.BUY, cfg)
     plan = ExitPlan(
-        profit_target_pct=cfg.leg_in_target_width,
+        profit_target_pct=cfg.leg_in_target_width or 0.0,
         profit_basis="lock_width",
         stop_loss_pct=cfg.leg_in_stop,
         short_delta_limit=None,
@@ -816,6 +821,7 @@ def build_leg_in(
         kind="leg_in",
         hedge_trigger=cfg.leg_in_hedge_trigger,
         lock_target_width=cfg.leg_in_target_width,
+        ema_exit=cfg.leg_in_ema_exit,
         alignment="bullish" if bullish else "bearish",
     )
     proposal = Proposal(

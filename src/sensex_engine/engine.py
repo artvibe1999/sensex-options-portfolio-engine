@@ -627,7 +627,8 @@ class Engine:
             short = p.legs[1]
             value = bid - marks[short.instrument_token]
             width = abs(short.strike - long_leg.strike)
-            if value >= float(plan["lock_target_width"]) * width:
+            target = plan.get("lock_target_width")
+            if target is not None and value >= float(target) * width:
                 self._close(
                     p, snap, f"locked spread reached {plan['lock_target_width']:.0%} of width", now
                 )
@@ -640,7 +641,7 @@ class Engine:
         if cutoff:
             self._close(p, snap, f"intraday square-off at {self.config.square_off:%H:%M}", now)
             return
-        if new_bar and state is not None:
+        if plan.get("ema_exit", True) and new_bar and state is not None:
             bullish = plan.get("alignment") == "bullish"
             if (bullish and state.close < state.ema21) or (
                 not bullish and state.close > state.ema21
@@ -867,9 +868,16 @@ class Engine:
         )
         self.last_evaluations = evaluations
         open_positions = self.book.open_positions(mode)
+        # Leg-in: one entry per direction per day (no re-entry after an exit or a stop).
+        today_iso = today.isoformat()
+        traded_today = {
+            p.strategy_id
+            for p in self.book.closed_positions(mode=mode, since_day=today_iso)
+            if p.strategy_id in LEG_IN and p.session_day == today_iso
+        }
         result = arbitrate(
             evaluations,
-            open_strategies=[p.strategy_id for p in open_positions],
+            open_strategies=[p.strategy_id for p in open_positions] + sorted(traded_today),
             max_concurrent=policy.tier.max_concurrent_positions,
         )
         blocked = ""

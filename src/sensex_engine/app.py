@@ -60,27 +60,26 @@ class CachedKiteAdapter(KiteReadOnlyAdapter):
 
 
 class AlertGate:
-    """De-duplicate monitor alerts: identical problems at most once per ``repeat_after``.
+    """De-duplicate broker-monitor alerts by health STATE, not by reason text.
 
-    A recovery is always delivered (once), and the next problem after a recovery is
-    delivered immediately.
+    The monitor can alternate between several reasons for one underlying outage (e.g. an
+    expired token gives both "not authenticated" and "data is stale"). So: the first
+    problem is sent, further problems (any reason) are muted for ``repeat_after`` seconds,
+    a recovery is sent once, and the first problem after a recovery is sent immediately.
     """
 
-    def __init__(self, repeat_after_seconds: float = 3600, clock=_time.monotonic) -> None:
+    def __init__(self, repeat_after_seconds: float = 6 * 3600, clock=_time.monotonic) -> None:
         self._repeat = repeat_after_seconds
         self._clock = clock
-        self._last: tuple[bool, str] | None = None
+        self._healthy: bool | None = None
         self._last_at = 0.0
 
     def should_send(self, healthy: bool, reason: str) -> bool:
         now = self._clock()
-        key = (healthy, reason)
-        if self._last is not None and self._last[0] == healthy:
-            if healthy:
-                return False  # already reported healthy
-            if key == self._last and now - self._last_at < self._repeat:
+        if self._healthy is healthy:
+            if healthy or now - self._last_at < self._repeat:
                 return False
-        self._last, self._last_at = key, now
+        self._healthy, self._last_at = healthy, now
         return True
 
 
@@ -305,8 +304,8 @@ def main() -> None:
                     )
                 engine_.notifier.send(
                     "Broker monitor problem - live gates closed, mode forced to PAPER.\n"
-                    f"Reason: {reason}{hint}\nPaper trading continues. (Repeats of this "
-                    "alert are muted for an hour.)"
+                    f"Reason: {reason}{hint}\nPaper trading continues. (Further monitor "
+                    "alerts are muted for 6 hours or until it recovers.)"
                 )
 
         monitor = build_supervised_monitor_from_settings(

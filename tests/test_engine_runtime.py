@@ -192,19 +192,20 @@ def test_help_lists_every_registered_command_and_start_aliases_help():
     assert "start" in COMMANDS
 
 
-def test_alert_gate_mutes_repeated_monitor_problems():
+def test_alert_gate_mutes_alternating_reasons_of_one_outage():
     from sensex_engine.app import AlertGate
 
     now = [0.0]
-    gate = AlertGate(repeat_after_seconds=3600, clock=lambda: now[0])
+    gate = AlertGate(repeat_after_seconds=6 * 3600, clock=lambda: now[0])
     assert gate.should_send(False, "not authenticated")
-    for t in (30, 60, 1800):
+    # The live failure mode: two reasons alternating every ~30 s for hours.
+    for t in range(30, 3 * 3600, 30):
         now[0] = t
-        assert not gate.should_send(False, "not authenticated")
-    now[0] = 1900
-    assert gate.should_send(False, "data stale")  # a different problem is reported
+        reason = "data is stale" if t % 60 else "not authenticated"
+        assert not gate.should_send(False, reason)
     assert gate.should_send(True, "recovered")
     assert not gate.should_send(True, "recovered")
-    assert gate.should_send(False, "data stale")  # first problem after recovery
-    now[0] = 1900 + 3601
-    assert gate.should_send(False, "data stale")  # hourly reminder
+    now[0] += 10
+    assert gate.should_send(False, "data is stale")  # first problem after recovery
+    now[0] += 6 * 3600 + 1
+    assert gate.should_send(False, "data is stale")  # 6-hourly reminder
