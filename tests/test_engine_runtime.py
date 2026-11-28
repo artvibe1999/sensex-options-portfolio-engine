@@ -209,3 +209,25 @@ def test_alert_gate_mutes_alternating_reasons_of_one_outage():
     assert gate.should_send(False, "data is stale")  # first problem after recovery
     now[0] += 6 * 3600 + 1
     assert gate.should_send(False, "data is stale")  # 6-hourly reminder
+
+
+def test_token_is_refreshed_even_outside_market_hours(tmp_path):
+    from datetime import datetime
+
+    from engine_fakes import FakeKite
+
+    from sensex_engine.book import EngineBook
+    from sensex_engine.engine import Engine, EngineConfig, Notifier
+    from sensex_engine.indicators import IST
+    from sensex_engine.kite import KiteReadOnlyAdapter
+    from sensex_engine.market_feed import MarketFeed
+
+    calls = []
+    saturday = datetime(2026, 11, 28, 6, 31, tzinfo=IST)
+    engine = Engine(
+        feed=MarketFeed(KiteReadOnlyAdapter(FakeKite())), book=EngineBook(tmp_path / "e.db"),
+        notifier=Notifier(), config=EngineConfig(), clock=lambda: saturday,
+        token_refresh=lambda: calls.append(1) or SimpleNamespace(token="new"),
+    )
+    engine.cycle()
+    assert calls == [1]
